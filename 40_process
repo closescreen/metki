@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#> Обнаружение лидов.
+
+#> input:
+#  1    2     3    4         5    6     7     8
+# sid  dom   uid timestamp  sz   path  bdom  bpath
+
+set -o pipefail
+set -u
+#set -o pipefail
+set +x
+
+docvars="siddom"
+
+resfile=$1
+day=`fn2days "$resfile"`
+
+siddom="../RESULT/20/$day/siddom.gz" # используется справочник sid-dom
+chk "$siddom" "($0, line: $LINENO) siddom file", "-s" "exists and filled" nop || exit 1 
+
+cp_file=$2 # здесь ожидаем имя файла, содержащее отфильтрованное "' ' sid sz expire"
+cp_reader=$3 # ридер контрольных точек
+
+#> вход с траффик-ридера:
+#> uid timestamp sid sz dom path bdom bpath
+#> удаляем sid==1
+#> остальное берем
+#> меняем порядок полей
+awk -F'\t' -v"OFS=*" '($3!=1) { print $3,$5,$1,$2,$4,$6,$7,$8} ' \
+ | sort -T. -t\* -k1,1n -k2,2 -k3,3n -k4,4n -S 333M --compress-program=gzip \
+ | lae -sw -lb="sid dom uid timestamp sz path bdom bpath" '
+
+#>  вход сортирован по sid dom uid timestamp 
+
+my %conf = do "conf.txt";
+my $siddomf = shift @ARGV;
+my %siddom = map { (split /\*/)[0,1] } cat $siddomf;
+
+my $cp_file = shift @ARGV; # sid sz expire
+my @control_points = map { my @l=split(/\*/,$_); { sid=>$l[0], sz=>$l[1], expire=>$l[2] } } cat $cp_file;
+#die Dumper \@control_points;
+
+#> Здесь задаются для конкретных sid - детекторы (perl-модули, обнаруживающие лиды).
+my %detectors=( 
+    #>: Детектор лидов Quelle:
+    172206 => do { require "LeadDetectorQuelle.pm"; \&LeadDetectorQuelle::detect }, 
+);
+
+my $defa_dete = do { 
+    #>: Детектор лидов по умолчанию:
+    require "LeadDetectorDefault.pm"; 
+    # В него загружаем control_points:
+    LeadDetectorDefault::set_control_points(\@control_points); 
+    \&LeadDetectorDefault::detect 
+};
+
+g{
+ #> пачки записей вх потока с одинаковыми sid,uid будут обрабатываться детектором за один раз
+ my $records = rec();
+ # используемый модуль детектора лидов определяется по sid
+ my $detect = $detectors{ $records->[0]{sid} } || $defa_dete;
+ my $leads = $detect->( $records ) or return;
+ for my $lead ( @$leads ){
+    #> для каждой записи, где детектор нашел лид:
+    #> ( если домен по sid есть в текущем siddom, то в качестве значения поля domain используется домен из siddom ):
+    my $dictdom = $siddom{ $lead->{ record }{ sid } };
+    $lead->{record}{ dom } = $dictdom if $dictdom;
+    p @{ $lead->{record} }{qw( sid dom uid timestamp sz )}, @{ $lead->{info} }{qw( mark expire )};
+    #>> На выходе: sid dom uid timestamp sz mark expire
+    #>> (сортировка прежняя).
+ }    
+} -key=>"sid,uid:sid,dom,uid,timestamp,sz,path,bdom,bpath"
+' "$siddom" <( cat "$cp_file" | $cp_reader )
+
+

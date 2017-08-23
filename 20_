@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+(
+#> Файлы с трафиком ../traffic_dir --------( через ./20_process )----------> сохраняет в ../RESULT/20/$day/HH.gz
+
+set +x
+set -e
+set -u
+set -o pipefail
+
+docvars="ff period maxf"
+
+ff=`find ../traffic_dir/ -name '[0-9][0-9].gz' | sort ` # откуда берет трафик
+
+#ff=`echo $ff | words --first` # отладка, 1 file
+
+period=`conf conf.txt store_period` # Из конфа:  период, которым ограничиться
+
+ff=`echo "$ff" | only --younger="$period"mon`
+
+ff=`echo "$ff" | only '[[ $(du -b %f | cut -f1) -gt 20  ]]'`
+
+res_ff=`echo "$ff" | perl -e'while(<>){ print "$_\n" for map {s|\.\./traffic_dir|../RESULT/20|; $_} split }'`
+
+res_ff=`echo "$res_ff" | only -without=total.gz`
+
+src_ff=`echo "$res_ff" | perl -e'while(<>){ print "$_\n" for map {s|../RESULT/20|\.\./traffic_dir|; $_} split }'`
+
+maxf=$((`conf conf.txt batch_max_days` * 24)) # Из конфа:  количество файлов, обрабатываемое за один проход
+
+echo "$src_ff" | washing -timelog=./time_20.log -res="s|\.\./traffic_dir|../RESULT/20|" -v_flag="zcat %s | ./reader | ./20_process %s" -comp=gzip -maxf="$maxf"
+
+)>>"$0.log" 2>&1
+
+
+

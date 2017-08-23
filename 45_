@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#> 40/leads + 30/total + channels_previous_days -----( 45_process )------>40/leads_channels.gz
+(
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+day=${1:-""} # vj;но указать за какое число посчитать
+deb=${2:-""}
+
+[[ -n "$deb" ]] && set -x
+
+if [[ -z "$day" ]]; then
+ #> файлы-источники: leads.gz, только те, у которых рядом есть channels_prev_days.gz, а в 30/{day} есть total.gz:
+ ff=`find ../RESULT/40 -name 'leads.gz' | sort`
+else
+ ff="../RESULT/40/$day/leads.gz"
+fi
+
+ff=$(echo "$ff" |
+ words -uniq -fu=sort |
+ only -near='channels_prev_days.gz' |
+ only -having='s|/40/(\d\d\d\d-\d\d-\d\d)/leads.gz|/30/$1/total.gz|' |
+ only -having='s|/40/(\d\d\d\d-\d\d-\d\d)/leads.gz|/35/$1/total.gz|')
+
+echo $ff | washing -res='s|leads\.gz|leads_channels.gz|' -v_flag="zcat %s | ./45_process %s" -compr=gzip  -timelog="time_45.log"
+
+)>>"$0.log" 2>&1

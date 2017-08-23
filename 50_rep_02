@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#> Суммы переходов (uniq,+cnt) по кукам - за один день 
+#> на базе 30/.../total.gz - переходов.
+#>> За один рассчетный день.
+set -u
+set -o pipefail
+src=$1
+
+#30 format: "sid domain mname chan mvaldom uid sec bdom"
+
+zcat $src \
+ | lae -lb="sid domain mname chan mvaldom uid sec bdom" '_{p Sid, Domain, Chan, Mvaldom, Uid}' \
+ | sort -T. -t\* -k1,1n -k2,2 -k3,3 -S 333M --compress-program=gzip \
+ | summator -fu="minstr,uniq,+cnt"
+
+#>> out: Sid, Domain, Chan, Mvaldom(first), uniq, cnt

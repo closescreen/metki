@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#> 50_repo_13 (детальный) ---> 50_repo_14 (суммы перехватов по суткам)
+#> Кто у кого сколько перебил лидов.
+set -u
+set -x
+set -o pipefail
+cd `dirname $0`
+
+total30_f=${1:?total30file!}
+repname_f=${2:?repname!}
+day=`fn2days "$total30_f"`
+
+srcrep="../RESULT/50/$day/50_repo_13.gz"
+chk "$srcrep" "Отчет-источник" "-s" "Exists and filled" nop || exit 2
+
+zcat "$srcrep" | cut -d* -f3,16 | sort -t\* -k2,2 -k1,1 | summator -la=0 -fu=cnt
+
+# можно использовать поле 21 = OK|EXPIRE
+
+#> OUT: win_channel * fail_channed * cnt

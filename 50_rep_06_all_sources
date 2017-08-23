@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set +x
+set -u
+set -o pipefail
+
+#> По неделям в разрезе домены-каналы: переходы, лиды.
+
+src=$1 # файл-источник
+res=$2 # файл-результат
+
+set +u
+    light=$3 #  3-й параметр "light"|""
+    onlysoloway=$4 #  4-й параметр "soloway"|""
+set -u
+
+    
+if [ -z "$light" ]; then
+    src_base_name="50_rep_04.gz" # обычно берем полный отчет 50_rep_04
+else
+    src_base_name="50_rep_04_light.gz" # light-version берет 50_rep_04_light
+fi
+            
+d=`fn2days $src`
+chk $d "date" || exit 1
+
+res_dir=`dirname $( dirname "$res")`
+
+#> если нет соответствующего файла-источника , тихо выходим, не захламляя лог.
+[[ -e "$res_dir/$d/$src_base_name" ]] || exit 3
+
+# 50_rep_04 format: 
+#    1    2    3      4      5      6     7     8     9     10    11	12
+lb="data sid domain categ1 categ2 chan mvaldom uuids uids uleads leads chsum"
+
+zcat $res_dir/$d/$src_base_name | ./50_rep_filt_solo -lb="$lb" -ll -comm=" - фильтрация сайтами соловья вкл/выкл" "$onlysoloway"  \
+| lae -M=Dom -M='Date::Calc qw(Week_of_Year)' '
+_{
+    #>> adriver sid 190075 не печатает:
+    return if not 0+Sid;
+    return if Sid==190075;
+    #>> вычисляет неделю:
+    my ($y,$m,$d) = Data=~m|(\d\d\d\d)-(\d\d)-(\d\d)|;
+    $y+=0 and $m+=0 and $d+=0 or ( warn("bad data $F[DATA] in line $_  --->  skip it.") and next);
+    my ($week,$year) = Date::Calc::Week_of_Year( $y,$m,$d );
+    my $sol_week=($year-2012)*52 + $week;
+    
+    p0 $sol_week, Domain, Chan, Uuids, Uids, Uleads, Leads, Chsum;  
+}
+' | sort -T. -t\* -k1,1n -k2,2 -k3,3 -S 333M | summator -fu="sum,sum,sum,sum,sum"  |
+perl -lne's|[\;\t]|_|g; s|\*|\;|g; print; #замена некот. символов и смена разделителя с * на ;' |
+./50_rep_min_filter |
+./50_rep_tail
+
+#>> Выход: week domain channel uniq_perehodov perehodov uniq_leads leads chsum
+
+ 
+ 

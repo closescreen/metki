@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#> Перехваты (по предыдущему переходу).
+#> Создан по причине тикета 1528 Вопрос о "перебивании" наших лидов конкурентами // Quelle
+#>  в какой процентной и количественной мере наши лиды перебивает admitad и actionpay 
+#>   (т.е. клик на наш баннер перед заказом с сайта был предпоследним перед кликом с баннера этих конкурентов).
+#>  какие вообще источники перебивают наши лиды 
+
+
+#> ПЛАН:
+#> посмотреть на [не наши] лиды, перейти в переходы и найти наши переходы непосредственно перед [чужими] лидами.
+#> Можно смотреть все лиды и все предыдущие переходы. А потом уже сортировать наши  - не наши.
+set -u
+set -x
+set -o pipefail
+cd `dirname $0`
+
+total30_f=${1:?total30file!}
+repname_f=${2:?repname!}
+day=`fn2days "$total30_f"`
+
+#> отчет строим только для указанных sid,sz:
+sid=194885
+sz=5
+expire=3
+# <---http://quelle.ru
+
+leads_channels_f=`echo $total30_f | perl -lape"s|30/$day/total\.gz|40/$day/leads_channels.gz|"`
+chk "$leads_channels_f" "Leads-channels file" "-s" "exists and filled" nop || exit 2
+
+# все 30/total за $maxexpire дней включая $day, с проверкой существования
+maxexpire=`zcat $leads_channels_f | awk -F* '$1=='$sid' && $3 && $4=="LEAD" && $7=='$sz' {print $8}' | sort -nur | words -first`
+chk "$maxexpire" "maxexpire from leads_channels file"
+
+
+all_totals_ff=`hours -t="${day}T00" -shift=1 -n=-"${maxexpire}days" -days | files ../RESULT/30/%F/total.gz | words -reverse | only -all -s`
+chk "$all_totals_ff" "Файлы 30/total за ${maxexpire} дней"
+
+# leads-channels:
+#  1      2          3                4     5            6           7   8       9                10                11  12
+# Sid,    Dom,      $channel->{mval}, Mark, Uid,         Sec,        Sz, Expire, $channel->{sec}, $channel->{bdom}, "", "";
+# 194885* quelle.ru* actionpay      * LEAD* 21593764711* 1393603962* 5*   3     *  1393431902    * strcrb.ucoz.ru  *   *
+
+
+# 30/total:
+# sid    dom       mname      chan    mvaldescr uid        sec        bdom  
+# 194885*quelle.ru*utm_source*admitad*admitad*13589696826*1393581269*timechasy.ru
+
+# берем из всех нужных 30/total записи переходов на $sid, тех кук которые делали лиды на $sid+$sz 
+# сортируем по куке-ремени в обратном порядке и пускаем на вход
+
+zcat $all_totals_ff |
+ awk -F* '$1=='$sid |
+ grepf -k=6 -fn=<( zcat "$leads_channels_f" | awk -F* "\$1==$sid && \$3 && \$4==\"LEAD\" && \$7==$sz {print \$5}" | sort -nu) |
+ sort -T. -t\* -n -k6,6 -k7,7r |
+ lae -lb="sid dom mname chan mvaldescr uid sec bdom" '
+my ($leads_channels_f, $sid, $sz) = @ARGV;
+my %lch;
+open LCH, $leads_channels_f or die "$leads_channels_f: $!";
+while(my $l=<LCH>){
+    chomp $l;
+    my %f;
+    @f{qw| sid dom chan mark uid sec sz expire chsec |} = split /\*/, $l;
+    push @{ $lch{ $f{sid} }{ $f{uid} }{ $f{chsec} }{ $f{chan} } }, $l;
+}
+
+# читаем поданные 30/totalы отсортированные по куке-убыванию_времени
+_{
+ if ( my $leads = $lch{ &prevSid}{ &prevUid }{ &prevSec }{ &prevChan } 
+    and ( Uid==prevUid and Sid==prevSid ) 
+    and ( Sec!=prevSec or Chan ne prevChan ) ){
+    # если в прошлой строке был найден переход, каналу которого засчитан лид, значит эта строка - предпоследний переход (с перебитого канала)
+    # конечно, если это таже кука, перешедшая на тот же sid
+    # дополнительное условие: этот переход не должен быть точной копией предыдущего перехода (такие встречаются).
+    for my $lead_line ( @$leads ){
+	print $lead_line, @F;
+    }
+ } 
+ 
+} -prev=>"sid=0,uid=0,sec=0,chan";
+    
+' <(zcat "$leads_channels_f"| awk -F* "\$1==$sid && \$3 && \$4==\"LEAD\" && \$7==$sz") "$sid" "$sz" |
+awk -F* -v"OFS=*" '{print $_,$6-$19<'$(($expire * 86400))'?"OK":"EXPIRED"}'
+
+#days=`hours -t=2014-02-28 -shift=1day -n=-1day -days`
+

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#> ../traffic_dir/day/00-23.gz ---( merge )-----( 10_process )----> 10/day/sessions.gz
+(
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+#> Из конфа:  период, которым ограничиться
+#period=`conf conf.txt store_period` 
+period=3 # отчет тяжелый, больше 2 месяцев назад делать - это издеваться над машиной
+
+ff=`find ../traffic_dir/ -name '[0-9][0-9].gz' | sort -r | only --younger="$period"mon | only -sizegt=20` # откуда берет трафик
+#hours=`hours -t=2013-08-03T00 -tod=2013-09-09 | words -reverse`
+#ff=`files "../traffic_dir/%F/%H.gz" "$hours" | only -s`
+ 
+#> только за период $period
+#ff=`echo $ff | only --younger="$period"mon`
+
+#> в период отладки период маленький
+#ff=`echo $ff | only --younger=45days`
+
+#> только если нет соответствующего sessions.gz
+ff=`echo "$ff" | perl -lane'for my $src (@F){ ($res=$src)=~s|^.+?(\d\d\d\d-\d\d-\d\d).+?$|../RESULT/10/$1/sessions.gz|; next if -s $res; print $src }'`
+
+#> Из конфа:  количество файлов, обрабатываемое за один проход
+maxf=$(( `conf conf.txt batch_max_days`*24 )) 
+
+#> только первые $maxf файлов 
+ff=`echo "$ff" | perl -lape's|\s+|\n|g' | perl -lane"print if 1..$maxf" `
+
+#ff=`echo $ff | perl -lape's|\s|\n|g' | head -n35` # отладка ограничение кол-ва файлов
+
+[[ -z "$ff" ]] && exit 2
+
+echo "$ff" | mergef -automkdir \
+    -least=24 -incomplete="20: %t_%n.%e" -where 'only -nopr -all -older=3days' -reverse \
+    -gr='m|.+?/(\d\d\d\d-\d\d-\d\d)/.+?|; "\.\./RESULT/10/$1" ' \
+    -prefi='./reader | awk -F"\t" -v"OFS=*" "\$3!=1{NF=NF;print }"' \
+    -k=1,1n -k=2,2n -m  \
+    -postfi="./10_process" \
+    -total="sessions.gz" \
+    -comp=gzip
+
+#echo "$ff" | washing -timelog=./time_10.log -res="s|\.\./traffic_dir|../RESULT/10|" -v_flag="zcat %s | ./reader | ./10_process %s" -comp=gzip -maxf="$maxf"
+
+)>>"$0.log" 2>&1

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#> на базе 30/.../total.gz- кол-во  кук разложенное по колонкам-возрастам.
+#> За один рассчетный день.
+#> ticket 2246
+set -u
+set -o pipefail
+src=$1
+set +x
+
+#             1    2      3    4      5    6    7   
+#30 format: "sid domain mname chan mvaldom uid sec ..."
+
+# потребуются файлы с рожденными куками за текущий и предыдущий дни:
+
+day=`echo "$src" | fn2days`
+born_uids_files=`hours -d="$day" -n=-190day -shift=1day -days | files "../RESULT/50/%F/50_rep_42_born_uids.gz"`
+all_exists=`echo "$born_uids_files" | only -all -s`
+not_found_cnt=$?
+[[ -z "$all_exists" ]] && echo "Нехватка $not_found_cnt файлов, из $born_uids_files">&2 # но не выходим
+only_exists=`echo "$born_uids_files" | only -s` # продолжаем с имеющимися
+
+#rep03file=$( echo `dirname $1` | sed -e's|/30/|/50/|' )"/50_rep_03.gz"
+#chk "$rep03file" "rep03" "-s" "exists and filled" nop || exit 1
+
+bottoms="0 1 4 8 15 31 61 91 180"
+bottoms_count=`echo "$bottoms" | words -count`
+
+bottoms_count=$(( $bottoms_count + 1 )) # плюс колонка для NA
+tuniq=`perl -e'$i=shift(); print join",", map {"tuniq"} (1..$i)' "$bottoms_count"` #строка из cnt повторений tuniq:
+
+zcat $src | cut -d* -f1-7 | 
+ ./uid_too_youg -uid=6 -sec=7 -born="$born_uids_files" -bottom="$bottoms" | # sid domain mname chan mvaldom uid sec 
+ perl -F'\*' -lane'
+    BEGIN{
+	%co = do "conf.txt" or die "co!";
+	$cc = $co{custom_clients} or die "cc!";
+    }
+    if ( $cc->{ $F[0] } ){
+	if ( my $cc_name = $cc->{ $F[0] }{ $F[1] } ){
+	    $F[1] = $cc_name;
+	}
+    }
+    print join "*", @F;
+ ' |
+ cut -d* -f2,4,6,8- | # стоит "-" минус! не ошибка.
+ sort -T. -t\* -k1,1 -k2,2 -S 333M --compress-program=gzip |
+ summator -fu="uniq,$tuniq" | # domain chan uniq_perehodov (+ NA и по колонке на каждую из $bottoms )
+ sort -T. -t\* -k1,1 -k2,2 |
+ awk -F* -v"OFS=*" '$3>=2' # берем только строки где уников >2
+#> получается вот так:
+#>         1      2         3            4        ...                 
+#>    : Domain, Chan, uniq_perehodov, NA_uniqs,   ...
+
+exit
+#> а теперь добавляем лиды из 50_rep_03.gz:
+# awk -F* -v"OFS=*" '{print $1"-"$2"-"$3,$0}' |
+# addf -df <( zcat "$rep03file" | awk -F* -v"OFS=*" '{print $2"-"$3"-"$5, ($8?$8:0) }' ) -nowarn -repl |
+# perl -F'\*' -lane'print join "*", @F[1,2,0],@F[3..$#F],' |
+# awk -F* -v"OFS=*" '$4>=2'  # просто удаляем строки если меньше 2 уник кук за день
+#>         1      2      3           4           5       ...                 
+#>    : Domain, Chan, LEADS   uniq_perehodov, NA_uniqs,  ...
+  
+

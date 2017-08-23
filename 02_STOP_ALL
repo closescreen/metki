@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+#> Остановка всех перечисленных задач.
+
+set -x
+set -u
+
+PATH=$PATH:/usr/local/rle/var/share3/TIKETS/bike
+
+cd `dirname $0`
+
+#> Создает "стоп-файл", который нужно удалить, чтобы дать запускающему скрипту запускать задачи. 
+echo "Stoped by $USER at "`date` >> ./02_stop_all.stop
+
+
+pids=`find ../pids/ -name "*.pids"`
+for pf in $pids;do
+    fork -pf=$pf -kila
+done

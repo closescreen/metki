@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#> 50_rep_15_week + 50_rep_05_soloway_sources_light -----> 50_rep_15_join
+exit 0 # откл
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+srcf=$1
+resf=$2
+day=`fn2days "$srcf"`
+dire="../RESULT/50/$day"
+
+src="50_rep_05_soloway_sources_light.gz" # 97;wikimart.ru;cityads;81385;105985;197;233;33000
+r15="50_rep_15_week.gz"
+
+[[ ! -s "$dire/$src" ]] && exit 3
+[[ ! -s "$dire/$r15" ]] && exit 3
+
+zcat $dire/$src | lae -lb="';' week dom chan uniq uids uleads leads chsum" '
+my $r15 = shift or die "r15!";
+my %r15;
+open F, "zcat $r15 |" or die $!;
+while(<F>){
+    chomp;
+    my ($week, $sid, $dom, $chan, $uleads, $leads, $chsum) = split /\*/;
+    $r15{ $week }{ $dom }{ $chan } = [$uleads, $leads, $chsum];
+} 
+#die Dumper \%r15;
+
+_{
+    # не печатаются недели, в которых нет данных по одностраничным сессиям (из 50_rep_15_week.gz)
+    return if not exists $r15{ &Week };
+	
+    p0 @F, @{ delete( $r15{ &Week }{ &Dom }{ &Chan } )||[0,0,0] };
+};
+
+# попадаются незначительные строки такие
+#warn "useless domains: ".Dumper( \%r15);
+#for my $week ( keys %r15 ){
+#    for my $dom ( sort keys %{$r15{$week}} ){
+#	for my $ch ( sort keys %{ $r15{$week}{$dom} } ){
+#	    p0 $week, $dom, $ch, 0,0,0,0 , @{ $r15{$week}{$dom}{$ch} };
+#	}
+#    }
+#}
+
+' "$dire/$r15" 

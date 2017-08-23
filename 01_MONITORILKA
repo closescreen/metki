@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -u
+set +x
+PATH=$PATH:/usr/local/rle/bin
+PATH=$PATH:/usr/local/rle/var/share3/TIKETS/bike
+export PATH
+cd `dirname $0`
+
+
+
+#> Мониторилка:
+ahtung_days=`seq 3 15 | words -r`
+
+#ahtung_reports="50_rep_04_concurrents_leads_email.gz 50_rep_06_all_sources.gz"
+ahtung_reports_scripts=`find . -name "50_rep_[0-9]*" | only -x`
+
+fr="d.belyaev@internest.ru"
+to="d.belyaev@internest.ru"
+
+for ahtung_script in $ahtung_reports_scripts; do
+    ahtung_report=$(basename $ahtung_script).gz
+    for aday in $ahtung_days; do
+	if [[ -z "$(find ../RESULT/50/ -name "$ahtung_report" | only -younger=${aday}days)" ]]; then
+	    ( echo -e "Subject: 986 - ahtung! $aday days not report $ahtung_report\n\n"
+		)| /usr/sbin/sendmail -f "$fr" "$to" 
+	    
+	    exit
+	fi
+    done
+done
+
+#)>>$0.log 2>&1 
+

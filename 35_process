@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#>
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+#cat ./leads_control_points_types.txt | awk -F\; '$4=="CPS" || $4=="CPA/R" || $4=="CPO" {print $2}' | sort -nu | viatmp -ch="[[ -s %tmp ]]" ./35_sites.txt
+
+# где sid>30000:
+cat ./leads_control_points_types.txt | awk -F\; '$2>30000 {print $2}' | sort -nu | viatmp -ch="[[ -s %tmp ]]" ./35_sites.txt
+
+sites=`cat ./35_sites.txt | words -fu=sortn -ot="|"`
+job_history_log "$1" "sid=$sites,uid,second,sz,custom" -true="uid,custom" -ll | lae '
+_{ 
+ if ( my ($check) = $F[CUSTOM]=~/151\=(\d+)/ ){
+    p0 @F[SID,UID,SECOND,SZ], $check;
+ }
+}
+#> OUT:
+#> SID UID SECOND SZ CHECK
+' | sort -T. -t\* -k1,1n -k2,2n -k3,3n
+
+
+

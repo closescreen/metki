@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+lae -lb="uid sec sid sz dom ref bdom bref" '
+#> предполагается что вход отсортирован по uid,sec
+my %se; 
+_{
+ if( Uid!=prevUid   ){ 
+    on_uid_sessions_break( prevUid, \%se );
+ }elsif( $se{&Sid}{last} and Sec - $se{&Sid}{last}>=1800 ){
+    on_timeout_session_break( Uid, Sid, \%se );
+ }
+ $se{&Sid}{first}||=Sec; 
+ $se{&Sid}{last}=Sec; 
+ $se{&Sid}{exp}++;
+ $se{&Sid}{uexp}{&Ref}||=1;
+} -prev=>"uid=0";
+
+on_uid_sessions_break( prevUid, \%se );
+
+
+sub on_uid_sessions_break{
+ my ($uid, $se ) = @_; 
+ # нужны только сессии с одним просмотром
+ for my $sid (sort {$a<=>$b} keys %$se){
+    if ( $se->{$sid}{exp} == 1 ){
+	p0 $uid, $sid, $se->{$sid}{first}, $se->{$sid}{last}, $se->{$sid}{exp}, scalar(keys %{$se->{$sid}{uexp}});
+    }	
+ } 
+ undef %$se; 
+}
+
+sub on_timeout_session_break{
+ my ($uid, $sid, $se) = @_;
+ # нужны только сессии с одним просмотром
+ if ( $se->{$sid}{exp} == 1 ){
+    p0 $uid, $sid, $se->{$sid}{first}, $se->{$sid}{last}, $se->{$sid}{exp}, scalar(keys %{$se->{$sid}{uexp}});
+ }    
+ delete $se->{$sid};
+}
+
+'
+#>> Выход: uid, sid, session_start, session_stop, exposures, uniq_exposures.
+#>> Сортировка по uid. 
+
+

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#> Перехваты лидов, суммы по дням.
+set +x
+set -o pipefail
+
+src_file=$1 # 30/total.gz, нам он не нужен
+res_file=$2 
+#>: период, за который строится отчет
+period_days=$3 # за сколько мес (может быть не указан)
+if [[ -z "$period_days" ]]; then
+    #>: если третьим параметром не указан период в днях, берется период из конфа
+    period_days=$(( `conf conf.txt store_period`*30  - `conf conf.txt max_expire_days` ))
+fi
+set -u
+
+day=`fn2days "$src_file"` # рассчетный день
+days="$(days $day -n=-"$period_days") $day" # дни, кот. нам понадобятся
+
+#>: отчет строится на базе файлов:
+ff=`files ../RESULT/50/%F/50_rep_11.gz "$days"` # файлы
+found_ff=`echo "$ff" | only -all -e` # должны быть все вычисленные файлы
+not_found_ff=""
+if [[ -z "$found_ff" ]]; then
+    not_found_ff=`echo "$ff" | only '[[ ! -e %f ]]'`
+fi    
+chk "$found_ff" "Файлы-сточники 50_rep_11.gz" '$_' "Нехватает: $not_found_ff" || exit 1
+
+#[[ -z "$ff" ]] && exit 3 # или выход с ошибкой, но с кодом, который не логгится
+ff=`echo "$found_ff" | words -reverse` # в обратном порядке
+
+#>: Мы:
+about_channel="soloway" # относительно какого канала строить отчет
+
+perl -Mstrict -e'
+#> подготовка: печатает содержимое каждого файла с первой колонкой = day
+for my $file ( @ARGV ){
+    my ($day) = $file=~m/(\d\d\d\d-\d\d-\d\d)/;
+    open FILE, "zcat $file |" or die $!;
+    print join "*", $day, $_ while <FILE>;
+}
+' $ff | lae -lb='day sid dom uid found_channel lost_channel' '
+
+my $about_channel = shift or die "about_channel!";
+_{
+ #> берем только строки, где оба канала заполнены и не одинаковые
+ return if !Found_channel or !Lost_channel or Found_channel eq Lost_channel;
+ my ( $lost_found, $opponent ) = Found_channel eq $about_channel ? 
+    ( "${about_channel}_found", Lost_channel ) : 
+    Lost_channel eq $about_channel ? 
+	( "${about_channel}_lost", Found_channel ) : 
+	("","");
+
+ #> берем только строки, где мы участвуем 
+ return if !$lost_found;   
+
+ p Day, $opponent, Dom, $lost_found, Uid
+} 
+' "$about_channel" | sort -T. -t\* -k1,1 -k2,2 -k3,3 -k4,4 | summator -fu="uniq,+cnt"
+#> по последним двум колонкам считаются суммы
+#>> на выходе: день * конкурент * домен * мы_нашли/потеряли * уник_лидов * лидов
+#> сортировка по первым 4-м полям
+

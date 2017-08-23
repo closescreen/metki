@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#> Суммы переходов (uniq,+cnt) по кукам - за один день 
+#> из 30/.../total.gz - переходов.
+#>> Похож на 02, только кроме канала, указывется еще и источник-б.домен (еще один, самый нижний уровень группировки).
+#>> За один рассчетный день.
+set -u
+set -o pipefail
+src=$1
+
+#30 format: "sid domain mname chan mvaldom uid sec bdom"
+
+zcat $src \
+ | lae -lb="sid domain mname chan mvaldom uid sec bdom" -M="Dom" '_{p Sid, Domain, Chan, Dom::d2l(Bdom), Mvaldom, Uid}' \
+ | sort -T. -t\* -k1,1n -k2,2 -k3,3 -k4,4 -S 333M --compress-program=gzip \
+ | summator -fu="minstr,uniq,+cnt"
+
+#>> out: Sid, Domain, Chan, Bdom, Mvaldom(first), uniq, cnt

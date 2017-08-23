@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#> По тикету 1642. Отправка отчета 50_rep_04_concurrents_leads по e-mail.
+#(
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+src=$1
+res=$2
+
+fr="d.belyaev@internest.ru"
+to="il@rle.ru, anton@rle.ru, leads@soloway.ru, vmosin@adriver.ru, t.abakumova@soloway.ru, m.bilalova@internest.ru, garafieva@soloway.ru, ivihrov@adriver.ru, tanya@soloway.ru, i.ivanova@soloway.ru, d.belyaev@internest.ru"
+#to="d.belyaev@internest.ru"
+
+resdir=`dirname $res`
+report_src="$resdir/50_rep_04_concurrents_leads.gz"
+#report_src="$resdir/50_rep_04_cl_test.gz"
+chk "$report_src" "Отчет - источник" "-s" "exists" nop || exit 3
+day=`fn2days $report_src`
+
+# чтобы случайно не заспамить получателя, проверка, не отправлять письма старше 3 дней
+# чтобы отправить письма за любой день, - закомментировать
+upto=`echo $day | only -all -upto=3days`
+#chk "$upto" "Признак актуальности отчета. Эта проверка позволяет не заспамить получателя $to в случае пересчета " || exit 3
+
+#client=`froms 50_rep_04_concurrents_leads -var=client`
+#chk "$client" "назв клиента" || exit 2
+
+zcat "$report_src" | perl -Mstrict -e'
+my ( $fr, $to, $day ) = @ARGV;
+my ( $send_client, $client, @text );
+
+while(<STDIN>){
+ chomp;
+
+ if ( m/^Client\:(.+)$/i ){
+    $send_client = $client if $client;
+    $client = $1;
+    if ($send_client){
+    	sendmail( $send_client ) or warn "cant send by $send_client $fr, $to, $day" if @text;
+	undef @text;
+    }	
+ }
+ push @text, $_;
+
+}
+if ($client){
+    $send_client = $client;
+    sendmail( $send_client ) or die "cant send by $send_client $fr, $to, $day"; 
+}    
+
+sub sendmail{
+    my ($cl) = @_;
+    my @letter;
+    if ( @text ){
+	push @letter, "Subject: t1642 $cl - $day\n\n";
+	push @letter, @text;
+	push @letter, "\n\nYou can download this report from: http://crawler.adriver.x/share/d.belyaev/986/$day/50_rep_04_concurrents_leads.gz\n";
+	my $letter = join( "\n", @letter );
+	my $rv = system("bash","-c", "(cat <<END\n$letter\nEND\n) | /usr/sbin/sendmail -f \"$fr\" \"$to\"");
+	return !$rv;
+    }else{
+	warn "empty text!";
+	return undef;
+    }
+}
+' "$fr" "$to" "$day"
+
+
+if [[ $? -eq 0 ]]; then echo "$to"; fi
+
+#)>>"$0.log" 2>&1

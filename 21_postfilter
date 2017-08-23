@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set +x
+set -u
+set -o pipefail
+
+#> Переводит поле "dom" входного потока в домен 2-го уровня.
+#>: Входные поля перечислены в -lb.
+lae -lb="sid dom uid sec sz path bdom bpath" -sw '
+ my %conf = do "./conf.txt";
+ #>: Из конфа: значащие домены 3-го уровня, которые не переводятся во 2-й
+ my @domains_3l = map qr/$_/, @{ $conf{ domains_3l } };
+ use Dom;
+ 
+ sub sdom{
+    my $url = shift;
+    return "NA" if $url=~m/^NA$/;
+    $url =~s/\.$//;
+    #>> Исключение: значащие домены 3-го уровня, указанные в конфе (domains_3l), переводит в дом 3-го уровня.
+    my $rv = Dom::d2l( $url, { d3l=>\@domains_3l } ) || $url;
+    return $rv;
+ }
+ 
+ _{
+    set_dom( sdom( Dom ) );
+    #>> На выходе: тоже, что на входе с замененным dom на домен 2-го уровня (кроме значащих доменов 3-го ур-ня).
+    p @F  
+ }
+'

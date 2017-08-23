@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+#> Прогоняет строку входных данных с STDOUT формате 20/<day>/total.gz через ./30_process и печатает результат.
+#> как если бы эта строка была строкой из 20/total.gz
+#> Справочные данные берет из готовых справочников на указанную дату.
+
+#> 1-й параметр - дата ( YYYY-MM-DD ), в контексте которой прогонять строку. (В папках за эту дату будут браться вспомогательные данные).
+
+#> Вх. формат:
+#>   1       2          3         4                                                    5          6
+#>  sid,    dom,       uid,      path,                                                bdom       bpath
+#> 172206*quelle.ru*366876107*/Women_fashion/?anid=yandex_market&utm_source=yamarket*yandex.ru*/yandsearch?lr=213&text=quelle
+#> bdom - домен 2-го уровня, а не веь.
+
+#> например:
+#>echo "172206*quelle.ru*366876107*/Women_fashion/?anid=yandex_market&utm_source=yamarket*market.yandex.ru*/yandsearch?lr=213&text=quelle" | ./conf_testing
+
+cd `dirname $0`
+PATH=$PATH:/usr/local/rle/var/share3/TIKETS/bike
+set -o pipefail
+set -x
+
+day=${1:-`find ../RESULT/20 -name "mvaldom.gz" | sort | words -last | fn2days`}
+set -u
+chk "$day" "Date" "is_a_day_format" "дата YYYY-MM-DD" noprint || exit 1
+
+total_20_filename=../RESULT/20/$day/total.gz
+
+res_file=${2:-"total.test.gz"}
+
+# stdin - на вход:
+./30_process "$total_20_filename" "$res_file" "FORCE"

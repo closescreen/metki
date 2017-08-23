@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#> Данный скрипт единожды вызывает все нужные для начала работы скрипты и выходит.
+#> Запускать этот скрипт нужно периодически, например, 1 раз в 5 мин.
+#> Запускать можно сколь угодно часто - незаконченные процессы не дадут запуститься новым.
+#> Каждая задача, запускаемая из этого скрипта, обрабатывает данные, какие уже готовы для нее и выходит.
+#>***
+#> NOTE:
+#> В скриптах используются команды из папки "bike".
+#> Нужно дополнить PATH этим путем, чтоб работало.
+#> Я это сделал везде, где, мне казалось, это нужно сделать, но мог и пропустить какие-то скрипты.
+#>***
+
+set -u
+set +x
+PATH=$PATH:/usr/local/rle/bin
+PATH=$PATH:/usr/local/rle/var/share3/TIKETS/bike
+export PATH
+cd `dirname $0`
+
+#> Если присутствует файл ./02_stop_all.stop, то - этот скрипт выходит с ошикой и просьбой удалить файл.
+#> Он образуется при запуске 02_STOP_ALL.
+#> Это сделано для того, чтобы во время редактирования скриптов крон не запускал их.
+[[ -e ./02_stop_all.stop ]] && echo -e "02_stop_all.stop found with text: $(cat ./02_stop_all.stop) \nRemove it and relaunch me." >&2 && exit 1 
+
+#fork -pf=../pids/01.pids -single "nice ./01_"
+
+(
+#> Проверка load average:
+if loadaverage -1m -lt 40; then
+ 
+ echo "Runned at "$(date +"%F %H:%M") # - отладка
+ 
+ fork --single -pf=../pids/99.pids "nice ./99_" -wait # ставим его первым, чтоб потом другие скрипты не искали отсутствующие файлы
+
+# fork -single -pf=../pids/10.pids "nice -n19 ./10_" # sessions, используется mergef 
+ fork -n=1 -dela=1 -pf=../pids/20.pids "nice ./20_" 
+ fork --single -pf=../pids/21.pids "nice ./21_" # используется mergef, много r/w.
+ fork --single -pf=../pids/23.pids "nice ./23_" # используется perlfase через ssh
+ fork -n=1 -dela=1 -pf=../pids/25.pids "nice ./25_" # ( используется g{} )
+ fork -n=1 -dela=1 -pf=../pids/26.pids "nice ./26_" 
+ fork -n=1 -dela=1 -pf=../pids/27.pids "nice ./27_" # ( используется g{} )
+ fork -n=1 -dela=1 -pf=../pids/30.pids "nice ./30_" 
+ fork -n=1 -dela=1 -pf=../pids/35.pids "nice ./35_CHECK"
+ fork --single -dela=1 -pf=../pids/36.pids "nice ./36_MERGE"
+ fork -n=1 -dela=1 -pf=../pids/40.pids "nice ./40_"
+ fork --single -pf=../pids/41.pids "nice ./41_" # mergef
+ fork -n=1 -dela=1 -pf=../pids/43.pids "nice ./43_"
+ fork -n=1 -dela=1 -pf=../pids/45.pids "nice ./45_"
+ fork -n=1 -dela=3 -pf=../pids/50.pids "nice ./50_" # ( используется summator )
+ 
+ fork --single -pf=../pids/95.pids "nice ./95_" # копирование на share
+else
+ echo "$(hostname) $(date +"%F %H:%M") - loadaverage too big ( $(loadaverage -1m) )" # - отладка
+ true
+fi
+
+
+ 
+
+)>>$0.log 2>&1 
+

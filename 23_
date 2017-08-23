@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+(
+
+#> 20/.../total.gz ------( 23_process )----> словарь siddom.gz (sid-domain)
+
+set +x
+set -u
+set -e
+set -o pipefail
+
+cd `dirname $0`
+
+# файлы-источники берутся из:
+ff=`find "../RESULT/20" -name "total.gz" | sort -r`
+chk "$ff" "src files to create siddom dictionary" || exit 2
+
+#>: Из конфа: обрабатыват файлы пачками, по:
+maxf=`conf conf.txt batch_max_days`
+
+echo "$ff" | words -uniq | washing -res='s|total.gz|siddom.gz|' -v_flag="zcat %s | ./23_process" -compr=gzip -time=time_23.log -maxf="$maxf"
+
+)>>"$0.log" 2>&1

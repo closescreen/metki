@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#> выкладывание отчетов на шару.
+cd `dirname $0`
+(
+set +x
+#> возможный первый параметр =force произвести копирование не смотря на расписание.
+force=$1
+
+set -u
+set -o pipefail
+
+#>: выкладывается в:
+share="../share"
+
+# Расписание не хочется отдавать крону. 
+# Рассчитано, на то, что запускаться может несколько раз, а выполнять или нет - решается здесь.
+
+if [[ "$force" != 'force' ]]; then
+    #> Если есть на share папки, моложе N дня, то выход: 
+    [[ -n "$(find "$share/" -type d | only --younger=2d)" ]] && exit 0
+    [[ `date +"%-H"` -lt 11 ]] && exit 0 # раньше N-ти часов не копировать, бывает не готовы все отчеты
+fi
+
+#> последний день, за который готовы отчеты:
+lastdir=`dirname "$( find ../RESULT/50 -type f -name "50_rep_05_soloway*.gz" | only -near="50_rep_06_all_sources_light.gz" | words -sort | words -last )"`
+lastday=`echo "$lastdir" | fn2days`
+
+chk "$lastday" "Последний день" || exit 0
+
+lastday=`echo "$lastday" | only --younger=7days`
+[[ -z "$lastday" ]] && exit 0
+
+mkdir -p "$share/$lastday"
+
+# формируем список файлов для копирования:
+ff=`find "$lastdir" -name "50_rep_0[5,6]*.gz" | grep -P '05|06'`
+[[ -z "$ff" ]] && exit 0
+# в добавок:
+ff="$ff `find $lastdir -name '50_rep_04_light*.gz'`"
+ff="$ff `find $lastdir -name '50_rep_11_days_light.gz'`"
+ff="$ff `find $lastdir -name '50_rep_11_weeks*.gz'`"
+#ff="$ff `find $lastdir -name '50_rep_15_join.gz'`"
+ff="$ff `find $lastdir -name '50_rep_25*.gz'`"
+ff="$ff `find $lastdir -name '50_rep_04_concurrents_leads.gz'`"
+ff="$ff `find $lastdir -name '50_rep_42_too_young.gz'`"
+ff="$ff `find $lastdir -name '50_rep_42_too_young_leads.gz'`"
+
+
+ff=`echo "$ff" | only -s`
+
+cp -u -R $ff "$share/$lastday"
+
+#> копирование распакованных файлов в папку верхнего уровня:
+encode_from=UTF8
+#>: перекодировка в:
+encode_to=cp1251
+for f in $ff; do
+    base=`basename $f`
+    txt=${base/\.gz/.$encode_to.txt}
+    zcat "$f" | iconv -c -f "$encode_from" -t "$encode_to" | viatmp "$share/$txt"
+    #
+done
+
+#>: Удалить с share файлы и папки  старше $remove_older:
+rm -rf `find "$share/" -type d | only --older="$(conf conf.txt remove_older)m"`
+
+)>>"$0.log" 2>&1

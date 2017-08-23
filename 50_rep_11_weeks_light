@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#> light-версия отчета 50_rep_11_weeks
+#>> Формат такой же.
+set -u
+set -o pipefail
+
+./50_rep_11_weeks $* light

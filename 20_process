@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set +x
+set -o pipefail
+#>> Немного фильтрует зеропиксельный траффик, оставляет только:
+#>> - sid != 1 
+#>> - внешние переходы: dom != backdom
+#>> - реферер  - содержит "?"
+
+#> input format:
+#  1      2        3    4   5    6     7     8
+#> uid, timestamp, sid, sz, dom, path, bdom, bpath
+
+awk -F'\t' -v"OFS=*" '($3!=1) && (($5!=$7)||$5=="bonprix.ru") { print $3,$5,$1,$2,$4,$6,$7,$8} ' | sort -T. -t\* -k1,1n -k2,2 -k3,3n -k4,4n -S 333M --compress-program=gzip
+
+#> выход сортируется по первым 4-м полям
+#> порядок полей немного изменяет, (см. ниже)
+
+#>> out format:
+#    1    2    3    4          5     6     7    8
+#>> sid  dom  uid  timestamp   sz   path bdom bpath

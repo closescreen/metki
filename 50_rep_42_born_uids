@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#> Копирование с  hist7 файлов с номерами выданных кук по часам.
+set -u
+set +x
+set -o pipefail
+
+src_30=$1 # ../RESULT/30/<day>/total.gz
+res=$2 # ../RESULT/50/<day>/50_rep_01.gz
+day=`fn2days "$res"`
+
+ssh hist7.adriver.x "[[ -s /usr/local/rle/var/grep/bw/042/RESULT/$day/total.gz ]] && zcat /usr/local/rle/var/grep/bw/042/RESULT/$day/total.gz" || exit 1
+

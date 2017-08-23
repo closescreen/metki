@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#> К 50_rep_02 (суммы по переходам - 30/total) присоединяются справа колонки из 50_rep_01 (суммы по лиды-каналы).
+#>> Данные за один рассчетный день.
+set -u
+set +x
+set -o pipefail
+
+src_30=$1 # ../RESULT/30/<day>/total.gz
+res=$2 # ../RESULT/50/<day>/50_rep_03.gz
+
+day=`fn2days "$res"`
+
+# leads_channels sums:
+rep_01="../RESULT/50/$day/50_rep_01.gz"
+chk "$rep_01" "($0 line: $LINENO) rep_01 file" "-s" "exists and filled" nopr || exit 3
+rep_01_format="sid dom channel mark uniq cnt checksum"
+
+# visits_cannels sums:
+rep_02="../RESULT/50/$day/50_rep_02.gz"
+chk "$rep_02" "($0 line: $LINENO) rep_02 file" "-s" "exists and filled" nopr || exit 3
+
+#>: идем по суммам переходов, присоединяем суммы лиды-каналы:
+zcat "$rep_02" | lae -sw -lb="sid dom channel mvaldom uniq cnt" '
+my $leads_channels_sum_file = shift @ARGV or die "file!";
+open my $lcfh, "zcat $leads_channels_sum_file |" or die "$leads_channels_sum_file: $!";
+my %lech;
+while (<$lcfh>){
+ chomp;
+ my ( $sid, $dom, $channel, $mark, $uniq, $cnt, $chsum ) = split /\*/;
+ #> из лидов берем только строки с LEAD/ORDER
+ next if $mark eq "CONFIRM";
+ $lech{ $sid }{ $dom }{ $channel } = [ $uniq, $cnt, $chsum ];
+}
+
+_{  
+    p @F, @{ delete( $lech{ &Sid }{ &Dom }{ &Channel } ) || [undef,undef,undef] };
+};
+
+# распечатать оставшиеся lead-channel sums:
+for my $sid ( keys %lech ){
+    for my $dom ( keys %{ $lech{$sid} } ){
+	for my $channel ( keys %{ $lech{$sid}{$dom} } ){
+	    p $sid, $dom, $channel, "", 0, 0, @{ $lech{$sid}{$dom}{$channel} };
+	}
+    }
+}
+
+' "$rep_01" | sort -T. -t\* -k1,1n -k2,2 -k3,3 -S 333M
+
+#>> OUT: sid dom channel mvaldom uniq uids uniq_leads leads chsum
+
+
+
+

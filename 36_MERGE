@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#> ../RESULT/35/hh.gz -----> ../RESULT/35/total.gz
+#(
+set -u
+set -x
+set -o pipefail
+cd `dirname $0`
+
+day=${1:-""} # можно указать день
+
+if [[ -z "$day" ]]; then
+ ff=`find ../RESULT/35 -name "[0-9][0-9].gz" | sort | only -sizegt=20`
+else
+ ff=`hours -t="${day}T00" -n=24 | files ../RESULT/35/%F/%H.gz`
+fi  
+echo "$ff" |
+mergef -least=24 -incomplete="20: %t_%n.%e" -where 'only -nopr -all -older=3days' -m -k=1,1n -k=2,2n -k=3,3n
+
+#)>>"$0.log" 2>&1

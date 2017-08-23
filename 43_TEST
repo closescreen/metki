@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+(
+#> 30/.../total.gz -------( ./43_process )------->40/.../channels_prev_days.gz
+#>> channels_prev_days.gz - это с каких каналов были переходы до этого дня. 
+set -u
+set -x
+set -o pipefail
+cd `dirname $0`
+
+docvars="N process tmlog"
+N=`conf conf.txt max_expire_days` # макс. количество дней expire_days:
+chk "$N" "($0, line: $LINENO, максимальное EXPIRE_DAYS )" || exit 1
+
+ff=`find ../RESULT/30 -name "total.gz" | sort -r` # <-сначала поздние
+all_files_count=`echo "$ff"| wc -l`
+head_files=$(( $all_files_count - $N ))
+
+# в начале посчитанного периода на протяжении $N дней будет недостаточно данных, эти дни пропустим:
+[[ "$head_files" -le 0 ]] && echo "Too few files ($0, line: $LINENO)" && exit 0
+ff=`echo "$ff" | head -n"$head_files"`
+
+#> должны иметься 40/../leads.gz:
+ff=`echo "$ff" | words -uniq | only --having='s|RESULT/30/(\d\d\d\d-\d\d-\d\d)/total\.gz|RESULT/40/$1/leads.gz|'`
+
+srcdir='../RESULT/30' # откуда берет
+srcname='total\.gz' # что берет
+resdir='\.\./RESULT/40' # куда кладет
+resname='channels_prev_days.gz' # что кладет
+process="./43_process" # чем обрабатывает
+tmlog="time_43.log" # timelog
+
+ff=`echo "$ff" | only '[[ -n "$( fn2days %f | hours -n=-30days -days | files ../RESULT/30/%F/total.gz | only -all -s -warn)" ]]' -warn`
+
+#echo "$ff" | washing -timelog="$tmlog" -res="s|$srcdir|$resdir|; s|$srcname|$resname|" -v_flag="$process %s %f" -compr=gzip
+
+)#>>"$0.log" 2>&1

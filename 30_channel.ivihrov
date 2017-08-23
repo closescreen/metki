@@ -1,0 +1,338 @@
+#!/usr/bin/env perl
+
+use strict; 
+use warnings; 
+use Data::Dumper; 
+use Getopt::Long; 
+use FindBin qw($Bin);
+use RLE::RetargetingClient;
+my $rc = RLE::RetargetingClient->new(1);
+
+#$rc->{ERRHAND} = sub{
+#    $error = 1;
+#    warn Dumper \@fields, \@_;
+#}
+        
+
+my $usage = q{
+#>> Для определения канала по полям history ( ticket 1842 )
+#>> Пока в процессе 986 не участвует. Используется извне.
+
+#>> Получает на вход поток с полями.
+#>> Печатает поток с добавленным полем канал.
+
+--libs="." - папка с perl-модулями Dom.pm, Urlpa.pm. По умолчанию - используется @INC.
+--conf="./conf.txt"  - файл конфигурации. По умолчанию = ./conf.txt
+-t|-F|-FS="*" - разделитель входных записей. По умолчанию = "*"
+
+--sid|--sid-field=1 - номер поля sid. 
+
+(
+ --ref|--ref-field=2 - номер поля referer.
+ ИЛИ
+ (
+  --dom|--dom-field=2 - номер поля domain - используется программой как есть.
+  И
+  --path|path-field=3 - номер поля path.
+ )
+) 
+
+(
+ (
+ --dict-folder='../RESULT/20' (см ниже)
+ И
+ --dict-day='2014-11-01' (см ниже)
+
+   первая и вторая части пути к справочникам (ежесуточной статистики):
+   пример: #> --dict-folder='../RESULT/20' и -dict-day='2014-11-01' дают путь '../RESULT/20/2014-11-01' в котором находятся файлы за рассчетный день:
+    # (google_metki.gz, target_metki.gz, mvaldom.gz) 
+ )
+ ИЛИ
+ ( 
+ --dict-google-file='../RESULT/20/2014-11-01/google_metki.gz' - полное имя файла статистики 'по google'
+ И
+ --dict-target-file='../RESULT/20/2014-11-01/target_metki.gz' - полное имя файла статистики 'по target'
+ И
+ --dict-mvaldom-file='../RESULT/20/2014-11-01/mvaldom.gz' - полное имя файла статистики 'по mvaldom'
+ )
+)
+
+--auto-day=N 
+    - если указаны несуществующие файлы статистики - поискать, отматывая назад дату, содержащуюся в полном имени файла в формате lalala/YYYY-MM-DD/lalala
+    - N - на какое кол-во дней назад искать файлы статистики. 
+    N=0 - отключить поиск ( по умолчанию поиск включен )
+
+--deb - отладка на STDERR    
+
+};
+
+my %set = ( 
+    auto_day => 366, 
+);
+
+GetOptions(
+    "libs=s" => \$set{lib}, # f.e. '../mylibs'
+    "conf=s" => \$set{conf}, # f.e. "./conf.txt"
+    "t|FS=s" => \$set{fs}, # f.e. '*'
+    "ref-field=i" => \$set{ref_field},
+    "dom-field=i" => \$set{dom_field},
+    "path-field=i" => \$set{path_field},
+    "sid-field=i" => \$set{sid_field},
+    
+    "dict-folder=s" => \$set{dict_folder}, # f.e. '../RESULT/20/' OR '../RESULT/20/2014-11-26'(if without --dict-day)
+    "dict-day=s" => \$set{dict_day}, # f.e. '2014-11-26'
+    
+    "auto-day=i" => \$set{auto_day}, # f.e. --auto-day=0
+    
+    "dict-google-name=s" => \$set{dict_google_name}, # f.e. 'google_metki.gz'
+    "dict-google-file=s" => \$set{dict_google_file}, # f.e. '../RESULT/20/2014-11-26/google_metki.gz' ( = dict_folder + dict-day + dict-google-name )
+
+    "dict-target-name=s" => \$set{dict_target_name}, # f.e. 'target_metki.gz'
+    "dict-target-file=s" => \$set{dict_target_file}, # f.e. '../RESULT/20/2014-11-26/target_metki.gz' ( = dict_folder + dict-day + dict-target-name )    
+    
+    "dict-mvaldom-name=s" => \$set{dict_mvaldom_name}, # f.e. 'mvaldom.gz'
+    "dict-mvaldom-file=s" => \$set{dict_mvaldom_file}, # f.e. '../RESULT/20/2014-11-26/mvaldom.gz' ( = dict_folder + dict-day + dict-mvaldom-name )        
+    
+    "deb" => \$set{deb},
+    "help" => \$set{help},
+) or die "Bad options!";
+
+$set{help} and print $usage and exit 0;
+
+push @INC, $Bin;
+push @INC, $set{lib} if $set{lib};
+require Dom;
+require Urlpa;
+
+my $debwarn = do {
+ if ( $set{deb} ){ sub{ warn @_; @_} }
+ else { sub{@_} }
+};
+
+$set{conf} ||= $set{lib} ? "$set{lib}/conf.txt" : "$Bin/conf.txt" and -s $set{conf} or die "Not found conf $set{conf}";
+my %conf = do $set{conf};
+#&$debwarn( Dumper \%conf );
+my %CHANN_GROUP = do "/usr/local/rle/var/share3/TIKETS/1886/bin/channel-group.conf" or die "Possible, error in /usr/local/rle/var/share3/TIKETS/1886/bin/channel-group.conf ?. Why i cant do it?";
+
+$set{ dict_google_name } ||= "google_metki.gz";
+$set{ dict_google_file } ||= join "/", map { s|/$||; $_ } grep {$_} @set{qw/ dict_folder dict_day dict_google_name /} 
+    or die "Must be defined --dict-google-file OR --dict-folder --dict-day --dict-google-name";
+    
+$set{ dict_target_name } ||= "target_metki.gz";    
+$set{ dict_target_file } ||= join "/", map { s|/$||; $_ } grep {$_} @set{qw/ dict_folder dict_day dict_target_name /} 
+    or die "Must be defined --dict-target-file OR --dict-folder --dict-day --dict-target-name";    
+
+$set{ dict_mvaldom_name } ||= "mvaldom.gz";
+$set{ dict_mvaldom_file } ||= join "/", map { s|/$||; $_ } grep {$_} @set{qw/ dict_folder dict_day dict_mvaldom_name /}
+    or die "Must be defined --dict-mvaldom-file OR --dict-folder --dict-day --dict-mvaldom-name";    
+
+# если указаны несуществующие файлы статистики - поискать, отматывая назад дату, содержащуюся в полном имени файла в формате YYYY-MM-DD:
+if ( $set{ auto_day } ){
+    require "Date/Calc.pm";
+    for my $option ( qw/ dict_mvaldom_file dict_target_file dict_google_file / ){
+	my $f = $set{ $option } or next;
+	my ($prefix,$year,$mon,$day,$suffix);
+	my ($try_year, $try_mon, $try_day);
+	my $old_set = $set{ $option };
+	if ( !-s $f and ($prefix,$year,$mon,$day,$suffix) = $f=~/(.+)(\d\d\d\d)-(\d\d)-(\d\d)(.+?)$/ ){	
+	    #&$debwarn( "$prefix,$year,$mon,$day,$suffix" );
+	    ( $try_year, $try_mon, $try_day ) = ($year, $mon, $day);
+	    $try_day = $day;
+	    my $try_counter = 0;
+	    until ( -s( $set{ $option } = sprintf("$prefix%02d-%02d-%02d$suffix",$try_year, $try_mon, $try_day)) or $try_counter >= $set{ auto_day } ){
+		#&$debwarn( "try day $prefix$year-$mon-$try_day$suffix" );
+		$try_counter++;
+		($try_year, $try_mon, $try_day) = Date::Calc::Add_Delta_Days($try_year, $try_mon, $try_day, -1);
+	    }	
+	}
+	!-s $set{ $option } and warn "Not found files from $set{ $option } .. to $old_set. --auto-day=$set{ auto_day }";
+    }
+}
+
+    
+($\, $,) = ("\n", $set{fs} ||= "*");
+
+my $get_fields = do {
+ # Этот блок возвращает CODEREF, который будет сплитить $_ и возвращать список значений для присваивания ( $sid, $dom, %params ).
+
+ my %fsre = ( " "=>'\s+', '\s'=>'\s', 't'=>'\t', '\t'=>'\t' );
+ my $fsre = $fsre{ $set{fs} } || "\\$set{fs}";
+ my $sid_ind = ( $set{ sid_field } or die "--sid-field=N must be defined!" ) - 1;
+ my $parts = ( sort grep {$_} @set{qw/ sid_field ref_field dom_field path_field /} )[-1] + 1; # parts is a max( of required field numbers ) + 1
+
+ if ( $set{dom_field} and $set{path_field} ){
+    my ( $dom_ind, $path_ind ) = ( $set{dom_field}-1, $set{path_field}-1 );
+    sub{ 
+	map {
+	    $_->[0], $_->[1], Urlpa::rams( $rc->preprocessReferrer($_->[2]||"") )
+	} [ 
+	    ( split( /$fsre/o, $_, $parts ) )[ $sid_ind, $dom_ind, $path_ind ] 
+	]
+    }
+
+ }elsif( $set{ref_field} ){
+    my $ref_ind = $set{ref_field} - 1;
+    sub{ 
+	map {
+	    $_->[0], $_->[1], Urlpa::rams( $_->[2] )
+	} [ 
+	    map { $_->[0], Dom::split_ref( $rc->preprocessReferrer($_->[1]||"") ) } [ ( split( /$fsre/o , $_, $parts ) )[ $sid_ind, $ref_ind ] ] 
+	]
+    }
+    
+ }else{ die "--ref-field=N OR --dom-field=N --path-field=N  must be defined!" }
+ 
+};
+
+
+
+sub cat{
+ # usage: cat("file.gz") OR cat("file.txt")
+ # return LIST of chomp'ed lines.
+ my $f;
+ if ( $_[0]=~/\.gz/ ){ open $f, "zcat $_[0] |" or die "Can't open file $_[0]: $!"  }
+ else{ open my $f, '<', $_[0] or die "Can't open file $_[0]: $!" }     
+ return map {chomp; $_} <$f>
+}
+
+
+# метки, наличия которых достаточно, чтобы определить имя метки:
+my @sufficient_names = @{ $conf{ sufficient_names } };
+&$debwarn( "sufficient_names:", Dumper \@sufficient_names );
+
+# sufficient_for_channel - метки, наличие которых в записи достаточно чтобы определить и имя метки и канал:
+my %sufficient_for_channel = %{ $conf{ sufficient_for_channel } };
+&$debwarn( "sufficient_for_channel", Dumper \%sufficient_for_channel );
+
+# domain => metka
+my %metki = map { (split /\*/)[0,1] } cat $set{ dict_google_file };
+#&$debwarn( Dumper \%metki ); 
+
+# domain => metka
+my %target_metki =  map { (split /\*/)[0,1] } cat $set{ dict_target_file };
+#&$debwarn( Dumper \%target_metki );
+
+#> поверх google_metki пишем target_metki:
+%metki = ( %metki, %target_metki );
+undef %target_metki;
+
+my @disable_find = map qr/$_/, @{ $conf{ disable_find_metki_for_domains } };
+&$debwarn( "disable_find:",Dumper \@disable_find );
+
+# sid => { metka => { value => domain } }
+my %mvaldom; # <-позволяет по sid,mname,mval получить самый частый домен для этого значения.
+for ( cat $set{ dict_mvaldom_file } ){
+    my ($sid, $mname, $mval, $dom) = split /\*/;
+    $mvaldom{ $sid }{ $mname }{ $mval } = $dom;
+}
+#&$debwarn( Dumper \%mvaldom );
+
+# sid => CODEREF для предопределенных меток:
+my %predef_metki = %{ &{ $conf{ predefined_metki } } };
+&$debwarn( "predef_metki:",Dumper \%predef_metki );
+
+# список значимых доменов 3-го уровня (которые не надо переводить во 2-й )
+my @domains_3l = map qr/$_/, @{ $conf{ domains_3l } };
+&$debwarn( "domains_3l:",Dumper \@domains_3l );
+
+#>: Из конфа: списки замены по умолчанию (т.е. для всех сайтов):
+my $mval_replace_default = &{ $conf{ mval_replace_default } };
+#>: Из конфа: кастомные замены (для указанных сайтов)
+my %mval_replace_custom = %{ &{ $conf{ mval_replace_custom } } };
+
+
+my ( $sid, $dom, %params );
+my ( $metka_name, $metka_val, $val_descr );
+
+while(<>){
+ no warnings "uninitialized"; # если оставим так, то можно убрать ниже лишние проверки в случае если потребуется повышать производительность
+ chomp;
+ ( $sid, $dom, %params ) = &$get_fields;
+ &$debwarn("sid=$sid\ndom=$dom\nparams=".Dumper(\%params));
+ ( $metka_name, $metka_val, $val_descr ) = ("","","");
+ 
+ METKA_NAME: {
+    #>> Сначала смотрим, есть ли код для меток для данного sid в конфиге (predefined_metki).
+    #>> И если да, то вычисляем имя метки.
+    $metka_name = $predef_metki{ $sid } && &{ $predef_metki{ $sid } }( \%params ) and last METKA_NAME;
+
+    #>> Если нет, может присутствует метка, чье имя среди достаточных имен меток в конфиге (sufficient_names).
+    for ( @sufficient_names ){
+	if ( exists $params{ $_ } ){
+	    #>> Если да, то берем ее.
+	    $metka_name = $_ and last METKA_NAME;
+	}
+    }
+
+    #>> Если нет, может есть достаточные признаки определения метки/канала (sufficient_for_channel).
+    for ( keys %sufficient_for_channel ){
+	if ( exists $params{ $_ } ){
+	    #>> Если да, то берем это имя метки.
+	    $metka_name = $_ and last METKA_NAME;
+	}
+    }
+
+     #>> Если не нашли имени метки и если для этого домена нужно отключить гугловый способ:
+    my $disable_google;
+    for my $re ( @disable_find ){
+	if ( $dom && ($dom =~ m/$re/) ){
+	    $disable_google = 1;
+	    last;
+	}
+    }
+
+    if ( !$disable_google ){
+	$metka_name = $metki{ $dom } || $metki{ Dom::d2l( $dom, { d3l=>\@domains_3l } ) }
+    } 
+ }
+ &$debwarn( "metka_name = ".($metka_name||"") );
+ 
+ if ( $metka_name ){
+    #>> Значение метки получаем через sufficient_for_channel или из значения cgi-параметра.
+    $metka_val = $sufficient_for_channel{ $metka_name } || $params{ $metka_name };
+    
+    #>> Описанием для метки будет или значение из sufficient_for_channel или даиболее частый домен из mvaldom.
+    $val_descr = $sufficient_for_channel{ $metka_name } || $metka_val && $mvaldom{ $sid }{ $metka_name }{ $metka_val };
+
+    if ( $metka_val or $val_descr ){
+	&$debwarn( "metka_val = ".($metka_val||"")." , val_descr = ".($val_descr||"") );
+	REPLACE: {
+	    # по списку регекспов для замены значения метки:
+	    for my $re_val ( @{ $mval_replace_custom{ $dom }||[] }, @{ $mval_replace_default->{regs} } ){
+		my ( $regexp, $replacement ) = @$re_val;
+		if ( $metka_val=~/$regexp/ or $val_descr && $val_descr=~/$regexp/ ){
+		    $metka_val = $replacement;
+		    last REPLACE;
+		}
+	    }
+
+	    for my $coderef ( @{ $mval_replace_default->{subs} } ){
+		if ( my $val = $coderef->({ MVAL => $metka_val, MVALDOM => $val_descr }) ){
+		    $metka_val = $val;
+		    last REPLACE;
+		}
+	    }
+	}
+    }	 
+ }
+ 
+ #---------------
+
+# print join( $,, $_, $metka_val||"" );
+ my ($Sid,$Sz,$uid,$second,$typenum,$geo,$usertraits,$statusnum,$topcategories,$usergroup,$ref)=(split /\*/)[0,1,2,3,4,5,6,7,8,9,10];
+ my $mainUrl=0;
+ if ($ref=~/http[s]?:\/\/[^\/]+\/(?:\'|\?)/){
+	$mainUrl=1;
+ }
+ if ($metka_val){
+	my  $chgroup = $CHANN_GROUP{ lc $metka_val }{ CHG }||"noGr";
+ 	print join( $,, $Sid,$Sz,$uid,$second,$geo,$usertraits,$ref,$metka_val."^".$chgroup,$mainUrl );
+ }
+ else{
+ 	print join( $,, $Sid,$Sz,$uid,$second,$geo,$usertraits,$ref,"noChannel^noGr",$mainUrl );
+ }
+
+}
+
+
+

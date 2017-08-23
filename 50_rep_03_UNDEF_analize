@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set +x
+set -u
+set -o pipefail
+
+src_file=$1
+res_file=$2
+
+day=`fn2days "$res_file"`
+
+rep_src="../RESULT/50/$day/50_rep_03.gz"
+
+#rep_res="../RESULT/50/$day/50_rep_03_UNDEF_analize.gz"
+
+zcat "$rep_src" | 
+ awk -F* -vOFS=* '{print $2,$1,$3,$6,$8}' | # dom,sid,channel,uids,leads
+ summator -fu=sum,sum | # sums by dom,sid,channel
+ awk -F* -vOFS=* '$3=="UNDEF"{uh=$4;ul=$5;ch=0;cl=0} $3!="UNDEF"{ch=$4;cl=$5;uh=0;ul=0}; {print $1,$2,ch,cl,uh,ul}' | # dom,sid, hits,leads,Uhits,Uleads
+ summator -fu=sum,sum,sum,sum | # sum by dom,sid
+ awk -F* -vOFS=* '{print $1,$2, $6/($4+1) }' | # dom,sid UNDEF_leads/CH_leads
+ awk -F* -vOFS=* '$3' | # only >0
+ sort -t\* -k3,3nr
+
+#>> Выход:
+#>> dom * sid * UNDEF_ЛИДОВ / ЛИДОВ_С_КАНАЛОВ+1
+#>> оставлено только где $3>0
+
+
+
+

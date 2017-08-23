@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+#>> Внимание! Не помню нужен ли этот скрипт и какой отчет он делает. Может быть это старая версия.
+#> Перехваты переходов.
+set -u
+set +x
+set -o pipefail
+
+src_file=$1
+res_file=$2
+
+day=`fn2days "$src_file"`
+
+# файл с предыдущими переходами:
+channels_prev_days_file="../RESULT/40/$day/channels_prev_days.gz"
+[[ ! -e "channels_prev_days_file" ]] && exit 3
+
+control_points_file=`conf conf.txt leads_control_points`
+
+
+#>: на входе поток формата 30/total:
+zcat "$src_file" | lae -lb="sid dom mname channel mvaldom uid sec" '
+
+#> из channels_prev_days составляем х-м sid->dom->uid->channel->sec о предыдущих переходах
+my %prev;
+#channels_prev_days: sid, dom, uid, chan, sec
+map { my ($sid, $dom, $uid, $chan, $sec) = split /\*/; $prev{$sid}{$dom}{$uid}{$chan} = $sec } cat shift;
+
+#> из подготовленного файла с контрольными точками (sid sz expireDays) составляем х-м
+my %expire;
+map { my ($sid,$sz,$expire)=split; $expire{$sid}{$sz}=$expire } cat shift;
+
+#> из входа(30/total) составляем х-м послених переходы рассетного дня
+%today;
+_{
+    $today{ &Sid }{ &Dom }{ &Uid }{ &Channel } = Sec;
+};
+
+#> идем по %today
+for my $sid ( keys %today ){
+    for my $dom ( keys %{$today{$sid}} ){
+	for my $uid ( keys %{$today{$sid}{$dom}} ){
+	    for my $channel ( keys %{$today{$sid}{$dom}{$uid}} ){
+		#> для каждого сегодняшнего sid-dom-uid-channel=sec
+		#> ищем переход предыдущих дней
+		if ( my $prev_sec = $prev{$sid}{$dom}{$uid}{$channel} ){
+		    #> если нашли
+		    #> смотрим, есть ли соответствующий expire_days для таких sid-sz
+
+		    $ НЕЗАКОНЧИЛ - ПРИНИМАЕМСЯ ДУМАТЬ НАД ДРУГИМ 
+
+			#> если expire есть - ограничиваем давность предыдущего перехода количеством этих дней
+			#> если для таких sid-szexpire нет - то не ограничиваем давность предыдущего перехода
+		}else{
+		    #> если нет такого предыдущего перехода - пропускаем
+		    next
+		}	
+	    }
+	}
+	
+    }
+}
+
+
+' "$channels_prev_days_file" <(cat "$control_points_file" | ./40_cp_reader)
+

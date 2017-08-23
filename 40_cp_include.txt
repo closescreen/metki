@@ -1,0 +1,37 @@
+# Список контрольных точек, которые включить в учет лидов
+# Разделитель - точка с запятой. (допускаются пробелы)
+# sid; sz;  Название клиента в свободной форме # коммент
+187426; 1; AllSoft
+192406; 2; Aquaphor_MSK
+192406; 2; Aquaphor_SPB
+185228; 1; BestWatch
+175764; 7; Boombate_ТБ
+193594; 1; Burguy
+190930; 1; E96
+192916; 1; Frenchcorner
+193031; 1; HTC_Online
+191059; 1; InTouch
+183791; 1; KEY
+194661; 3; KNS
+188413; 1; Multivarka
+194241; 1; Narodnyi_Credit
+190844; 2; Petrovich
+190926; 1; Pharmacosmetica
+191062; 1; Pleer
+192819; 1; Postel-Deluxe
+191229; 2; Pult
+192363; 1; SuperStroy_ТБ
+190423; 1; Svyaznoy_Travel
+192653; 1; VamSvet_TB
+187074; 1; Vmage
+193836; 1; VZV
+197522; 1; alpindustria.ru
+203696; 3; mazda.ru
+203605; 1; SMSFinance
+203906; 11; MSK_Ford_Mondeo
+203906; 7; Ford (Ecosport)
+208441; 1; MSK_Alltime
+209458; 3; MSK_Redbull
+195544; 1; MSK_Technopark
+203637; 5; SPB_Oorraa
+195199; 1; SPB_Ormatek

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+set +x
+set -u
+set -o pipefail
+#set -e
+#> light-версия отчета 50_rep_04 ( не за весь store_period а за light_days из конфига )
+#> с выбранными полями (для Андрея и его виндовой утилиты)
+#> отфильтрованная только сайтами соловья
+
+src_file=${1:?srcfile!}
+res_file=${2:?resfile!}
+day=`fn2days $src_file`
+src_rep="../RESULT/50/$day/50_rep_04_light.gz"
+[[ -s "$src_rep" ]] || exit 3
+# 50_rep_04 format:
+lb="date sid domain categ1 categ2 chan mvaldom uuids uids leads uleads chsum"
+onlysoloway=1
+zcat "$src_rep" | ./50_rep_filt_solo -lb="$lb" -comm=" - фильтрация сайтами соловья вкл/выкл" "$onlysoloway" | cut -d* -f1,3,6,8,9,10,11,12
+

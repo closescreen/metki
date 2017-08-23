@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+#> По гуглу /url? | /aclc? в пути бкрефа найти соответствие имени метки, ответственной за канал для данного домена.
+
+set +x
+set -e
+set -u
+set -o pipefail
+
+
+#>> По принципу: Cамую встречающуюся метку(имя) для /url? и при этом самую мало встречающуюся в /aclk?. Должен быть перекос.
+
+f=$1; # имя файла-источника
+
+#>: На входе - трафик формата 20  (см -lb ниже):
+zcat $f | lae -t='*' -ot='*' -lb="sid dom uid sec zs path bkdom bkpath" -st -wa '
+require "./Urlpa.pm";
+my %conf = do "./conf.txt";
+my %unloved_metki = map {$_,1} @{ $conf{ unloved_names } };
+_{
+
+    #>> Анализирует только переходы с google.
+    return if !Bkdom or not Bkdom =~ /google\./;
+
+    #>> по урлу в backref определяет тип источника google (url|aclk):
+    #>> пропускает строки, где нет backref.
+    return if !Bkpath;
+    my ($gtype) = &Bkpath =~ m{^\/(url|aclk)\?} or return;
+
+    # урл из ref раскладывает на параметр=значение:
+    my %pars = Urlpa::rams( Path );    
+
+    #>> Не анализирует нелюбимые метки ( unloved_metki ), указанные в конфе.
+    $unloved_metki{$_} && delete $pars{$_} for keys %pars;
+
+    #> На промежуточном выходе Домен, Гугле-тип, имя_метки
+    p Dom, $gtype, $_ for keys %pars;
+
+}
+' | sort -T. -t\* -k1,1 -k2,2 -k3,3 -S 333M --compress-program=gzip \
+ | summator -la=0 -fu=cnt \
+ | summator -fu=vals,pers \
+ | lae -lb="dom googletype metka freq" -st -wa '
+#> Затем все отсортили, посчитали в разрезе домена-гуглетипа-имени количество случаев, перевели количество в проценты,
+#> получили формат: dom googletype metka freq
+
+my %recs = ( url=>undef, aclk=>undef );
+my %conf = do "./conf.txt";
+#>: Из конфа: х-м имен предпочитаемых меток
+my %favor_names = map {$_,1} @{ $conf{ favorite_names } }; 
+#>: Из конфа: регулярки для значений предпочтительных меток 
+my $favor_val_regs = $conf{ favorite_values_rgxp };
+
+#> потом пачками записей с одинаковым доменом анализируем (подробности легче посмотреть в скрипте)
+g{
+    for my $type ( keys %recs ){
+	no warnings;
+	# Раскидываем в $recs{url} и $recs{aclk} записи с соответствующими гугле-типами.
+	$recs{ $type } = [ sort { $a->{freq} <=> $b->{freq} } map { $_->{freq}+=0; $_ } grep { $_->{googletype} eq $type } rec() ];
+    }
+
+    my @aclk =  @{$recs{ aclk }} or return;
+    my $max_aclk_freq = $aclk[-1]{freq};
+    my %max_aclk_metki = map { $_->{metka},$_->{freq} } grep { $_->{freq} == $max_aclk_freq } @aclk;
+#	die Dumper \%max_aclk_metki;# if %max_aclk_metki;
+
+    my %url =  map { $_->{metka}, $_->{freq} } @{ $recs{ url } };
+    my %skewed_aclk_metki = map { $_,$max_aclk_metki{$_} } grep { $url{$_}||0 < $max_aclk_metki{$_} } keys %max_aclk_metki;
+#    die Dumper \%skewed_aclk_metki;
+    my @keys = sort keys %skewed_aclk_metki;
+    
+    #>> Выбранные метки должны удовлетворять хотябы одному из условий (больше 50%по частоте встречаемости, "favor_names", "favor_val_regexp").
+    @keys = grep { $skewed_aclk_metki{$_}>50 or $favor_names{$_} or $skewed_aclk_metki{$_} } @keys;
+    return if !@keys;
+    
+    #>> Если самых частых меток выбрали больше одной, то пробуем выбрать главную, исходя из списков приоритета в конфиге.
+    #>> Сортируем на основе суммы "количества баллов": 1-за "больше 50%", 2-за "favor_names" , 4-за "favor_val_regexp" в конфиге.
+    #>> Занявшая первое место - и будет выбранной меткой, остальные - записываются в доп колонку (для отладки).
+    @keys = sort {
+	( $skewed_aclk_metki{$b}>50 + (!!$favor_names{$b})*2 + ($skewed_aclk_metki{$b}=~$favor_val_regs)*4 ) 
+	    <=> 
+	( $skewed_aclk_metki{$a}>50 + (!!$favor_names{$a})*2 + ($skewed_aclk_metki{$a}=~$favor_val_regs)*4 )
+	} @keys if @keys > 1;
+    	
+
+    p $K, shift( @keys ), join( $La::lt, @keys);
+    #>> На выходе: domain, выбранная_метка, остальные_топовые_метки.
+    #>> Останые топовые - такие же по частоте встречаемости, т.е равнозначные с выбранной.
+    #>> По "остальным топовым" можно судить о том однозначен ли выбор метки для данного домена.
+
+} -key=>"dom"
+
+'
+
+

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+#> ../RESULT/20/$day/HH.gz ----( мержит, обрабатывает ./21_postfilter )----> сохраняетс в 20/$day/total.gz 
+(
+
+set +x
+set -u
+set -o pipefail
+
+
+cd `dirname $0`
+
+#>! однопроцессный.
+
+# Файлы-источники: 
+ff=`find "../RESULT/20" -name "[0-9][0-9].gz" | perl -lane'($total=$_)=~s|\d\d\.gz|total.gz|; next if -s $total; print' | sort -r`
+# отсеять 0-размера (такие бывают почему-то)
+ff=`echo "$ff" | only -s`
+
+[[ -z "$ff" ]] && exit 2
+
+#> Эти файлы мержатся в файлы total.gz (для каждой папки с датой соответственно). 
+#>( не мержатся, если в папке с датой есть меньше, чем 24 файла источника ).
+#> Сортировка сохраняется прежней.
+#> Результирующий поток пропускается через ./21_postfilter.
+mergef  -ff="$ff" -m -k=1,1n -k=2,2 -k=3,3n -least="24" -incomplete="20: %t_%n.%e" -where 'only -nopr -all -older=3days' -postfilter="./21_postfilter" -tt="total.gz" -reverse
+
+)>>"$0.log" 2>&1
+
+

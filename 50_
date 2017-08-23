@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+#> Cтроит отчеты 50
+#> Без параметров - по 30/day/total.gz  
+#> С параметрами 50_ <repnames> <days> - строит только отчеты repnames за дни <days>	 
+#> repnames и days - могут содержать список, разделенный пробелами (список оборачивать в кавычки)
+
+(
+set +x
+set +e
+
+cd `dirname $0`
+
+src_dir="../RESULT/30"
+res_dir="../RESULT/50"
+repnames=$1 # параметр указывающий имя отчета (одно из 50_rep_*)  (необязательный)
+days=$2 #  параметр, указывыющий за какое число посчитать отчет (необязательный)
+deb=${3:-""}
+[[ -n "$deb" ]] && set -x
+
+if [[ -z "$repnames" ]];then
+    repnames=`find . -name "50_rep_[0-9][0-9]*" | sort | only -x`
+fi
+set -u
+chk "$repnames" "Имя отчета (одно из ./50_rep_* - будет искать в текущей директории )"
+
+#maxf=`conf conf.txt batch_max_days` # Из конфа: количество дней, обрабатываемое за одид проход
+maxf=9 # с появлением тяжелого 50_rep_15 стало тяжело ждать по 5 отчетов
+
+for repname in $repnames; do
+    repname=`basename "$repname"` 
+    chk "$repname" "Программа формирования отчета (она же repname)" "-s" "exists" noprint || exit 2
+    if [[ -z "$days" ]]; then
+	period=`conf conf.txt store_period` # Из конфа: ограничение на период
+	#> ищем все файлы 30/<day>/total.gz за период $period в порядке 'сначала новые, потом старые':
+	ff=`find "$src_dir" -name "total.gz" | sort | only -younger="$period"mon`
+    else
+	ff=`files "$src_dir/%F/total.gz" "$days" | only -s`
+    fi
+
+    #> ограничиваем набор файлов теми, которые имеют соответствующий 40/<day>/leads_channels.gz:
+    ff=`echo "$ff" | only -having="s|$src_dir|../RESULT/40|; s|total\.gz|leads_channels.gz|"`
+    chk "$ff" "found such files" || exit 2
+    
+    #> зависимости repname от файлов в 50:
+    #> если для указанного в левой части скрипта нет указанного в правой части gz-файла, то отчет не будет строиться
+    depend_in_50=$(href -dict='
+	# Формат: имя скрипта из 50_rep* => имя gz в 50
+	"50_rep_42_too_young"=>"50_rep_42_born_uids.gz",
+	' -val="$repname")
+
+    if [[ -n "$depend_in_50" ]]; then
+	ff=`echo "$ff" | only -having="s|$src_dir|../RESULT/50|; s|total\.gz|$depend_in_50|"`
+    fi	
+
+    
+    echo "$ff" | washing -timelog=./time_50.log -nolog_status=3 \
+	-res="s|$src_dir|$res_dir| and s|total\.gz|$repname\.gz|" -v_flag="nice ./$repname %s %f" -comp=gzip -maxf="$maxf"
+done
+
+
+
+)>>"$0.log" 2>&1

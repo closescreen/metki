@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set +x
+set -u
+set -o pipefail
+#> light-версия 50_rep_05_soloway_sources (v2)
+
+#>! заменить после отладки
+./50_rep_06_all_sources $* "light" "soloway_only" 
+ 
+ 
+ 
+ 
+ 

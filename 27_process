@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+
+set -u
+set +x
+set -e
+set -o pipefail
+
+#> Расшифровываеn значения меток в наиболее частые домены.
+
+filename=$1 # имя файла передается чтобы скрипт сам решал читать его или еще что.
+srcdir=`dirname $(dirname "$filename")`
+file_basename=`basename "$filename"`
+
+curday=`fn2days "$filename"` # от файла $filename получаем опорный день.
+
+files=$filename # считаем один файл.
+
+chk "$files" "файлы для обработки" || exit 2
+siddom_name="$srcdir/$curday/siddom.gz"
+chk "$siddom_name" "File with sid-dom" "-e" "exists" noprint || exit 2 # с выдачей ошибок
+#[[ -e "$siddom_name" ]] || exit 2 # без выдачи в лог
+
+google_metki="$srcdir/$curday/google_metki.gz"
+chk "$google_metki" "File with google_metki" "-e" "exists" noprint || exit 2
+
+target_metki="$srcdir/$curday/target_metki.gz"
+chk "$target_metki" "File with target_metki" "-e" "exists" noprint || exit 2
+
+
+# (можно было бы отсортировать их, но сомневаюсь в полезности.)
+# вход будет отсортирован только внутри одного файла, но это ничего, потом он отсортируется.
+
+zcat $files | lae -t='*' -ot='*' -lb="sid dom uid sec sz path bkdom bkpath" -st -wa '
+use FindBin qw($Bin);
+use lib $Bin;
+require "predefined_subs.pm";
+
+# В ref-пути берем все пары cgi-параметров и напротив каждого имени и значения ставим back-домен.
+my $siddom = shift or die "siddom!"; 
+my %siddom = map { (split /\*/)[0,1] } cat $siddom;
+#die Dumper \%siddom; 
+
+my $google_metki = shift or die "google_metki!"; 
+my %metki = map { (split /\*/)[0,1] } cat $google_metki; 
+#die Dumper \%metki;
+
+#> поверх google-меток записываем target-метки - они точнее
+my $target_metki = shift or die "target_metki!";
+%metki = ( %metki, map { (split /\*/)[0,1] } cat $target_metki );
+#die Dumper \%metki;
+
+my %conf = do "./conf.txt";
+#>: Из конфа: предопределенные метки:
+my %predef_metki = %{ &{ $conf{ predefined_metki } } };
+#die Dumper \%predef_metki;
+
+#>: Из конфа: имена меток, достаточные для определения какое имя метки взять:
+my @sufficient_names = @{ $conf{ sufficient_names } };
+
+#>: Из конфа: имена меток, достаточные для определения канала:
+my %sufficient_for_channel = %{ $conf{ sufficient_for_channel } };
+
+require "./Urlpa.pm";
+use Dom;
+#>: Из конфа: значащие домены 3-го уровня (не переводятся во 2-й уровень):
+my @domains_3l = map qr/$_/, @{ $conf{ domains_3l } };
+
+#> Для каждой строки:
+_{
+ #> Для каждого sid:
+ #> Сначала смотрим, есть ли код для вычисления имен меток для данного sid в конфиге ( predefined_metki ).
+ my $mname_coderef = $predef_metki{ Sid() }; 
+ my $mname;
+
+ my %pa = Urlpa::rams( Path() );
+
+ #> Если в строке найдется одна из "sufficient_for_channel", то пропускаем ЗАПИСЬ - в файле mvaldom такие не нужны, потому что канал уже понятен.
+ for ( keys %sufficient_for_channel ){
+    if ( exists $pa{ $_ } ){
+        #next REC;
+        return;
+    }    
+ }                                    
+
+ #> Если был найден код вычисления из "predefined_metki", то используем его.
+ if ( $mname_coderef ){
+    # mname_coderef - приоритетней.
+    $mname = &{ $mname_coderef }( \%pa );
+ }
+
+ if ( !$mname ){    
+     #> Смотрим, может в строке найдется одна из "достаточных" имен меток из конфига (sufficient_names), если да то берем его.
+     for my $mn ( @sufficient_names ){
+	if ( exists $pa{$mn} ){
+	    $mname = $mn;
+    	    last;
+	}
+    }
+ }
+ 
+ if ( !$mname ){
+
+    #> Если нет - пытаемся определить домен по sid из файла siddom (справочник sid->domain).
+    my $dict_dom = $siddom{ Sid() }||"";
+    my ($ref_dom) = Dom();
+
+    if ( $dict_dom ){
+	#> И если нашли домен, то ищем метку (ожидается одна) по siddom-домену и х-м %metki.
+	( $mname ) = grep {$_} $metki{ $dict_dom };
+    }
+
+    if ( !$mname ){
+	#> Если не нашли имени метки, то ищем метку по ref-домену и х-м %metki.
+	($mname) = grep {$_} $metki{ $ref_dom };
+	if ( !$mname ){
+	    #> Если не нашли, пробуем поиск по короткому ref-домену.
+	    ( $ref_dom ) = Dom::d2l( $ref_dom, { d3l=>\@domains_3l } );
+    	    ( $mname ) = grep {$_} $metki{ $ref_dom||"" };
+	}
+    }
+ }
+
+ my $bkdom = Bkdom();
+
+ #> Если нет, то запись пропускаем.
+ $mname or return;#next;
+    
+ #> Если для вычисленного имени метки нет значения, то запись пропускаем.
+ my $mval = $pa{ $mname };
+
+ $mval or return;#next; # ищем имя метки в параметрах.или пропускаем
+
+
+ # печатаем имя_метки, значение, бкдомен.
+ p Sid(), $mname, $mval, Bkdom;
+    
+}
+# Потом sort-ом сортируем и отдаем сумматору, чтоб он посчитал количество каждого b-домена на каждую комбинацию.
+' "$siddom_name" "$google_metki" "$target_metki" \
+ | sort -T. -t\* -k1,1n -k2,2 -k3,3 -k4,4 -S 333M --compress-program=gzip | summator -la=0 -fu="+cnt" \
+ | lae -lb="sid mname mvalue bkdomain times" -M="List::Util qw(max)" '
+g{ 
+    my $max = max(Times);
+    my @bkdomains = map { $_->{bkdomain} } grep { $_->{times}==$max } &rec;
+    p $K, join( $La::lt, @bkdomains ), $max;
+    #>> На выходе: sid,mname,mvalue, max_domains, max
+    #>> , где max_domains - разделенные запятой самые частые домены. max - максимальная частота.
+} -key=>"sid,mname,mvalue"
+' 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

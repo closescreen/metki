@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#> на базе 40/.../leads_channels.gz - кол-во лидов  разложенное по колонкам-возрастам.
+#> За один рассчетный день.
+#> ticket 2246
+set -u
+set -o pipefail
+src=$1
+set +x
+
+# leads_channels:
+#  1    2     3     4    5    6     7    8     9        10        11      
+# sid, dom, chan, mark, uid, sec, check, sz, expire, chan_sec, chan_bdom
+# потребуются файлы с рожденными куками за текущий и предыдущий дни:
+
+day=`echo "$src" | fn2days`
+born_uids_files=`hours -d="$day" -n=-190day -shift=1day -days | files "../RESULT/50/%F/50_rep_42_born_uids.gz"`
+all_exists=`echo "$born_uids_files" | only -all -s`
+not_found_cnt=$?
+[[ -z "$all_exists" ]] && echo "Нехватка $not_found_cnt файлов, из $born_uids_files">&2 # но не выходим
+only_exists=`echo "$born_uids_files" | only -s` # продолжаем с имеющимися
+
+bottoms="0 1 4 8 15 31 61 91 180"
+bottoms_count=`echo "$bottoms" | words -count`
+
+bottoms_count=$(( $bottoms_count + 1 )) # плюс колонка для NA
+tcnt=`perl -e'$i=shift(); print join",", map {"tcnt"} (1..$i)' "$bottoms_count"` #строка из  повторений tcnt
+
+leads_channels_f="../RESULT/40/$day/leads_channels.gz"
+chk "$leads_channels_f" "файл ../RESULT/40/$day/leads_channels.gz" "-s" "exists" noprint || exit 2
+
+zcat $leads_channels_f |
+  perl -F'\*' -lane'
+    BEGIN{
+	%co = do "conf.txt" or die "co!";
+	$cc = $co{custom_clients} or die "cc!";
+    }
+    if ( $cc->{ $F[0] } ){
+	if ( my $cc_name = $cc->{ $F[0] }{ $F[1] } ){
+	    $F[1] = $cc_name;
+	}
+    }
+    print join "*", @F;
+ ' |
+ awk -F* -vOFS=* '$4 {print $2,$3,$5,$6}' | # dom chan uid sec(lead)
+ ./uid_too_youg -uid=3 -sec=4 -born="$born_uids_files" -bottom="$bottoms" | #  dom, chan, uid, sec, ... 
+ cut -d* -f1-3,5- | # стоит "-" минус! не ошибка.
+ sort -T. -t\* -k1,1 -k2,2 -S 333M --compress-program=gzip |
+ summator -fu="cnt,$tcnt" | # domain chan cnt_leads (+ NA и по колонке на каждую из $bottoms )
+ sort -T. -t\* -k1,1 -k2,2 |
+ awk -F* -v"OFS=*" '$3' # берем только строки где лидов >0
+#> получается вот так:
+#>         1      2         3         4    ...                 
+#>    : Domain, Chan,      leads,    NA,   ...
+
+  
+

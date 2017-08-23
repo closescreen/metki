@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#> ридер контрольных точек. На входе поток с к.т.
+#> фильтрует ненужные, заполняет умолчания, выбирает нужные поля
+#> Именно здесь указываем, какие контрольные точки брать.
+set -u
+set +x
+set -o pipefail
+
+#>: Формат control_points:
+awk -F'\t' -vOFS=* '{$1=$1; print}' |
+lae -lb="siteId siteZoneId url priceType clicksExpireDays leadPagesNum status statType billingType sitePaid startDate stopDate title id mediaplanId" '
+#>... другие поля пока не нужны
+
+my %conf = do "./conf.txt";
+
+my $cp_types_file = $conf{ leads_control_points_types } or die "types!";
+
+my %cp_types;
+
+for my $l ( cat "$cp_types_file" ){
+    my ($id,$sid,$sz,$type) = split /\;/, $l;
+    $cp_types{ $sid }{ $sz } = $type;
+}
+
+sub load_include_or_exclude($){
+ my ($fn) = @_;
+ # формирует в $hash из файла $fn структуру:  Sid => { Sz => "client_name_for_comment " },
+ # возвращает заполненный хеш
+ my %hash;
+ for my $l ( cat $fn ){
+    $l =~s/\#.*$//; # комментарии удаляются
+    my ($sid, $sz, $name) = split /\;/, $l; # разделитель полей ";"
+    next if !$sid or !$sz; # пустые sid,sz игнорируются
+    s/^\s+|\s+$//g for ($sid, $sz, $name);
+    $hash{ $sid }{ $sz } = $name;
+ }
+ return %hash; 
+}
+
+my %will_print = load_include_or_exclude("./40_cp_include.txt") or die "40_cp_include.txt!";
+my %will_not_print = load_include_or_exclude("./40_cp_exclude.txt") or die "40_cp_exclude.txt";
+
+_{
+#> Невозможно ловить лиды не имея SZ, поэтому sz="NULL" - не берем.
+
+return if not SiteZoneId()=~m/\d/; # заголовок
+return if SiteZoneId eq "NULL";
+
+my $will_print = 1;
+
+#>> При загрузке control_points отбрасываются $sitePaid==0. (Если не будет переопределено ниже.)
+$will_print = 0 if !SitePaid;
+    
+#>> При загрузке control_points:  clicksExpireDays, такие как NULL, или 0 заменяются, по правилам (заданным в конфе: replace_expire_value).
+&{ $conf{replace_expire_value} } for ( $F[ CLICKSEXPIREDAYS ] );
+
+#>> Отбрасываем sid + sz у которых в типах к.т. стоит "CPCall"
+if ( my $cptype = $cp_types{ &SiteId }{ &SiteZoneId } ){
+    $will_print = 0 if $cptype =~ /CPCall/i;
+}        
+
+#>> ИСКЛЮЧАЮТСЯ из рассчета, КТ из файла ./40_cp_exclude.txt
+$will_print = 0 if exists $will_not_print{ &SiteId }{ &SiteZoneId };
+
+#>> ВКЛЮЧАЮТСЯ в рассчет КТ из файла ./40_cp_include.txt:
+$will_print = 1 if exists $will_print{ &SiteId }{ &SiteZoneId };
+
+# -------------------------------------------------------------------
+
+
+if ( $will_print ){
+    #>: печатает только определенные поля (разделитель - пробел):
+    p SiteId, SiteZoneId, ClicksExpireDays;
+}    
+
+}
+'

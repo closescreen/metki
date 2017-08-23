@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set +x
+set -u
+set -o pipefail
+
+#> По неделям в разрезе домены-каналы-бэкдомены: переходы, лиды.
+#> По аналогии с 50_rep_06, только работает со своими исходними данными.
+
+src=$1 # файл-источник
+res=$2 # файл-результат
+
+set +u
+    all=$3 #  3-й параметр "all"|"". По умолчанию равно "", что значит "ligth"-отчет. 
+    onlysoloway=$4 #  4-й параметр "soloway"|""
+set -u
+
+    
+if [ -n "$all" ]; then
+    src_base_name="50_rep_24.gz" # берем полный отчет 50_rep_24
+else
+    src_base_name="50_rep_24_light.gz" # light-version берет 50_rep_24_light
+fi
+            
+d=`fn2days $src`
+chk $d "date" || exit 1
+
+res_dir=`dirname $( dirname "$res")`
+
+#> если нет соответствующего файла-источника , тихо выходим, не захламляя лог.
+[[ -e "$res_dir/$d/$src_base_name" ]] || exit 3
+
+# 50_rep_24 format: 
+#    1    2    3      4      5      6    7     8      9     10    11    12    13
+lb="data sid domain categ1 categ2 chan  bdom  mvaldom uuids uids uleads leads chsum"
+
+zcat $res_dir/$d/$src_base_name | ./50_rep_filt_solo -lb="$lb" -ll -comm=" - фильтрация сайтами соловья (м.б.вкл/выкл)" "$onlysoloway"  \
+| lae -M=Dom -M='Date::Calc qw(Week_of_Year)' '
+_{
+    #>> adriver sid 190075 не печатает:
+    return if Sid==190075;
+    #>> вычисляет неделю:
+    my ($y,$m,$d) = Data=~m|(\d\d\d\d)-(\d\d)-(\d\d)|;
+    my ($week,$year) = Date::Calc::Week_of_Year( $y,$m,$d );
+    my $sol_week=($year-2012)*52 + $week;
+    
+    p0 $sol_week, Domain, Chan, Bdom, Uuids, Uids, Uleads, Leads, Chsum;
+}
+' "$onlysoloway" | sort -T. -t\* -k1,1n -k2,2 -k3,3 -k4,4 -S 333M | summator -fu="sum,sum,sum,sum,sum"  |
+perl -lne's|[\;\t]|_|g; s|\*|\;|g; print; #замена некот. символов и смена разделителя с * на ;' 
+#>! отсутствует 50_rep_tail для Андрея, т.к. отчет очень длинный и при отрезании много теряется
+
+#>> Выход: week domain channel bdom uuids uids uleads leads chsum
+
+ 
+ 

@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+#> к лидам присоединяет "с каких каналов"
+set -u
+set +x
+set -o pipefail
+
+leads_file=$1
+day=`fn2days "$leads_file"`
+#>: переходы в рассчетный день:
+visits_file="../RESULT/30/$day/total.gz"
+#>: переходы в предыдущие дни:
+prev_channels_file=`dirname $leads_file`"/channels_prev_days.gz"
+#>: чеки:
+checks_file="../RESULT/35/$day/total.gz"
+
+#>: входной поток - лиды за этот день, сортируется по времени:
+sort -T. -t\* -S333M -k4,4n | lae -lb="sid dom uid sec sz mark expire" -sw '
+my ( $visits_f, $leads_f, $prev_ch_file, $checks_file ) = @ARGV;
+my %prev_ch;
+read_previous_channels( $prev_ch_file );
+
+my %checks;
+
+my $strong = 0; # кричать караул, если нет файлов (не всегда доступен history_log)
+
+my ($msg,$ok) = read_checks( $checks_file );
+!$ok and $strong and die "Cant read checks file. $msg";
+
+my %today_ch;
+my %lvl; # <--last visit line
+
+my %conf = do "conf.txt" or die "cant do conf"; 
+my $our_metka = $conf{our_metka} or die "our_metka!";
+
+my $ocmd = qq(zcat $visits_f |./40_filt_by_leads $leads_f | lae -lb="sid dom mname chan mvaldom uid sec bdom" "_{ p Sid,Dom,Uid,Sec,Chan,Bdom }" | sort -S333M -T. -t\* -k4,4n |);
+open my $visits_fh, $ocmd or die "$ocmd: $!";
+
+#> идем по лидам, отсортированным по sec:
+_{
+ #>: пополняем сегодняшние переходы к этой секунде:
+ read_more_today_visits( $F[SEC] ); 
+ #>: каждому лиду может соответствовать один чек (дубликаты игнорируем):
+ my $check = $checks{ $F[SID] }{ $F[UID] }{ $F[SEC] }||0;
+ #>: каналом считаем сегодняшний последний переход или последн переход в предыдущие дни:
+ my $channel = $today_ch{ $F[SID] }{ $F[DOM] }{ $F[UID] } || $prev_ch{ $F[SID] }{ $F[DOM] }{ $F[UID] };
+ if ( $channel ){
+    #> если канал найден:
+
+    #> с нашего канала существовал (возможно перебитый) переход, целых часов назад (это для поиска "окна"):
+    my $our_sec_hours_ago = int( ( Sec - ($channel->{our_sec}||0) )/3600 );
+    
+    if ( ( Sec - ($channel->{ sec }||0) ) / 86400 < Expire ){
+	#>> если времени с момента прихода с канала прошло меньше, чем Expire, то все ok:
+	p Sid, Dom, $channel->{mval}, Mark, Uid, Sec, $check, Sz, Expire, $channel->{sec}, $channel->{bdom}, "", "", $our_sec_hours_ago;
+	#>>1    2       3              4     5    6     7     8     9        10               11             12  13         14
+    }else{
+	#>> если времени прошло больше:
+	#>> записываем просроченный "был бы канал" и секунды в последние две колонки:
+	p Sid, Dom, "", Mark, Uid, Sec, $check, Sz, Expire, "", "", $channel->{mval}, $channel->{sec}, $our_sec_hours_ago;
+	#>>1    2   3    4     5    6      7    8     9     10  11      12               13                14
+    }
+ }else{
+    #>> если нет канала, лид пишем, а в колонке "канал", и других про канал пишем "пусто":
+    #>> OUT: sid, dom, chan, mark, uid, sec, check, sz, expire, chan_sec, chan_bdom.
+
+    p Sid, Dom, "", Mark, Uid, Sec, $check, Sz, Expire, "", "", "", "", "";
+    #>>1    2   3    4     5    6     7     8     9     10  11  12  13  14
+ }
+};
+
+sub read_more_today_visits{
+ # пополняет %today_ch новыми посещениями до секунд $to_sec включительно.
+ my ( $to_sec ) = $_[0] or die "sec!";
+ 
+ if( $lvl{sec} and $lvl{sec} > $to_sec ){
+    return
+ }
+ 
+ if ( $lvl{sec} and $lvl{sec} <= $to_sec ){
+    $today_ch{ $lvl{sid} }{ $lvl{dom} }{ $lvl{uid} }{ mval } = $lvl{mval};
+    $today_ch{ $lvl{sid} }{ $lvl{dom} }{ $lvl{uid} }{ sec } = $lvl{sec};
+    $today_ch{ $lvl{sid} }{ $lvl{dom} }{ $lvl{uid} }{ bdom } = $lvl{bdom};
+    if ( $lvl{mval}=~/^$our_metka$/io ){
+	# если канал соловей то он помещается в our_sec:
+	$today_ch{ $lvl{sid} }{ $lvl{dom} }{ $lvl{uid} }{ our_sec } = $lvl{sec}; 
+    }
+ }
+
+ while ( ! eof( $visits_fh ) ){
+    while( defined( $_ = <$visits_fh> ) ){
+        # Sid, Dom, Uid, Sec, Mval, Bdom - отсортировано по sec 
+        chomp;
+        my ( $sid, $dom, $uid, $sec, $mval, $bdom ) = split /\*/;
+        %lvl = ( sid=>$sid, dom=>$dom, uid=>$uid, sec=>$sec, mval=>$mval, bdom=>$bdom );
+        return if $sec > $to_sec; 
+        $today_ch{ $sid }{ $dom }{ $uid }{ mval } = $mval;
+        $today_ch{ $sid }{ $dom }{ $uid }{ sec } = $sec;
+        $today_ch{ $sid }{ $dom }{ $uid }{ bdom } = $bdom;
+        if ( $mval=~m/^$our_metka$/io ){
+    	    $today_ch{ $sid }{ $dom }{ $uid }{ our_sec } = $sec;
+        }
+    }
+ }
+    
+}
+
+sub read_previous_channels{
+ my $prev_ch_file = shift;
+ # читает $prev_ch_file и записывает в %prev_ch
+ open my $fh, "zcat $prev_ch_file |" or die "$prev_ch_file: $!";
+ while (<$fh>){
+    chomp;
+    my ($sid, $dom, $uid, $mval, $sec, $bdom, $our_sec) = split /\*/;
+    $prev_ch{ $sid }{ $dom }{ $uid } = { mval=>$mval, sec=>$sec, bdom=>$bdom, our_sec=>($our_sec||0) };
+ }
+}
+
+sub read_checks{
+ my $checks_file = shift;
+ open my $fh, "zcat $checks_file |" or return ("$checks_file: $!", undef);
+ # sid * uid * second * sz * sum
+ while (<$fh>){
+    chomp;
+    my ($sid, $uid, $sec, $sz, $sum) = split /\*/;
+    $checks{ $sid }{ $uid }{ $sec } = $sum;
+ }
+}
+
+' "$visits_file" "$leads_file" "$prev_channels_file" "$checks_file" | sort -T. -t\* -S333M -k1,1n -k2,2 -k3,3 -k4,4 -k5,5n -k6,6n
+
+
+
+
+
+

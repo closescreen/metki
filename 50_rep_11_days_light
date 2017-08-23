@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+#> light-версия 50_rep_11_days
+#>> фотмат тот же.
+
+set -o pipefail
+set -u
+./50_rep_11_days $* `conf conf.txt light_days`

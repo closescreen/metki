@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#> 50_rep_15 ------> 50_rep_15_day
+exit 0 # откл
+set -u
+set +x
+set -o pipefail
+
+src_file=$1
+res_file=$2
+
+day=`fn2days "$src_file"`
+rep="../RESULT/50/$day/50_rep_15.gz"
+[[ ! -s "$rep" ]] && exit 3 # без вывода ошибок в лог
+
+#>: на входе - поток формата 50_rep_15 
+
+zcat "$rep" | lae -lb="sid dom chan mark uid sec chsum sz expire channelsec expiredchan expiredsec bdom" '
+_{ 
+ #> интересуют только лиды LEAD,ORDER
+ return if Mark ne "LEAD" and Mark ne "ORDER";
+ p Sid, Dom, Chan, Uid, Chsum
+}
+' | summator -fu="uniq,+cnt,sum"
+#>> на выходе: sid dom channel uniq_leads leads_cnt checksum
+
+
+

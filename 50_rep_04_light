@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set +x
+set -u
+set -o pipefail
+#set -e
+
+#> light-версия отчета 50_rep_04 ( не за весь store_period а за light_days из конфига )
+docvars="days"
+days=`conf conf.txt light_days` # Из конфа: количество дней для light-версии отчета
+chk "$days" "light_days in conf" || exit 3
+./50_rep_04 $* "$days"
+

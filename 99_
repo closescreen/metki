@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+(
+
+set +x
+set -u
+
+cd `dirname $0`
+
+hours_ff_to_remove=`find ../RESULT/20 -name '[0-9][0-9].gz' | only -near=total.gz | only -older=15days`
+[[ -n "$hours_ff_to_remove" ]] && rm $hours_ff_to_remove
+
+docvars="remove_older"
+#> Удаление старых данных.
+
+remove_older=`conf conf.txt remove_older` # Из конфа: возраст данных, кот. можно удалять (в месяцах)
+chk "$remove_older" "remove_older" || exit 1
+
+res_dir="../RESULT"
+
+# двойные кавычки и [0-9] немного защищают от неверного res_dir
+rm_dirs=`find "$res_dir/"[0-9][0-9] -type d | only --older="${remove_older}m"`
+
+[[ -z "$rm_dirs" ]] || rm -f -R $rm_dirs
+
+)#>>"$0.log" 2>&1
+
+
+

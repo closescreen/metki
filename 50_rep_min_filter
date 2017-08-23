@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#>> фильтрует отчеты так, что строки с количеством неуникальных переходов меньше минимального не будут попадать в отчет
+
+lae -lb="';' week dom chan uuids uids uleads leads sumcheck" '
+my $min = 100;
+my $tname = "_TRASH_CHANNELS_less_${min}_uids";
+my @trash;
+my @trash_labels = (qw|uuids uids uleads leads sumcheck|);
+_{
+ if ( prevWeek and ( Week!=prevWeek or Dom ne prevDom )  ){
+    p prevWeek, prevDom, $tname, @trash;
+    undef @trash;
+ }
+ 
+ if ( Uids < $min and Chan ne "soloway" ){
+    for my $i ( @LI{ @trash_labels } ){
+	$trash[$i-3] += $F[$i];
+    }
+ }else{
+    p @F
+ }
+     
+} -prev=>"week=0,dom";
+
+p prevWeek, prevDom, $tname, map { $trash[$_-3] } @LI{ @trash_labels };
+
+'

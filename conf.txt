@@ -1,0 +1,289 @@
+#!/usr/bin/env perl
+use strict;
+#use FindBin qw($Bin);
+
+# conf.txt - может запускаться из perl и bash - скриптов, при этом $0 - не указывает на конф:
+my $full_name = "/usr/local/rle/var/share3/TIKETS/986/bin/conf.txt";
+my ( $conf_dir ) = $full_name =~m|(.+)/|;
+
+#> Главный конфиг, к которому обращаются все скрипты. Доступ к другим конфигам осуществляется тоже через него.
+#>
+#>! NOTE (1): После изменения конфига - проверь его на соответствие перловому синтаксису командой: perl -c conf.txt
+#>
+#>! NOTE (2): После изменения настроек, требуется удалить все результаты, зависимые от этих настроек за нужный период.
+#>   Пример, как это сделать:
+#>   Допустим, мы изменили что-то в файле "predefined_metki.conf". 
+#>   Ищем в каком месте данного конфа, подключен файл predefined_metki.conf: `grep predefined_metki.conf conf.txt`, 
+#>    и находим ключ 'predefined_metki' данного конфа.
+#>   Ищем скрипты, где есть обращение к ключу 'predefined_metki' данного конфига: `grep predefined_metki *`,
+#>    ( в bash - это строки вида: "conf conf.txt predefined_metki", в perl - строки вида: "$conf{predefined_metki}" )
+#>    и находим скрипты 27_process и 30_process (на момент написания этих строк). Эти скрипты вызываются из 27_ и 30_ соответственно.
+#>    В описании 27_ и 30_ видим, какие выходные файлы они формируют (20/.../mvaldom.gz и 30/.../total.gz). 
+#>     Значит удаляем за период, который хотим пересчитать из RESULT/20 - mvaldom.gz и все из RESULT/30 и все из папок с большими номерами (40,50). 
+#>    Кроме, того, хорошо бы убедиться, не остались ли какие-нибудь результаты, зависимые от содержимого 20/mvaldom.gz 
+#>	( или удалить, все что под подозрением ).
+
+my %c = (
+
+#>: период, за который должны иметься данные, в месяцах:
+    store_period => 5, # больше 4 в Excel не лезет, однако берем с запасом около 1 мес (для некот. скриптов нужны данные для анализа) 
+
+#>: некоторые отчеты, отрезать tail-ом (опять из-за Excel'a):
+    tail_n => 1048576,
+#>: удалять данные старее, чем:
+    remove_older => 7, # - не совмещаем со 'store_period' во избежание нечаянного удаления при экспериментах.
+
+#>  При большом количестве файлов для обработки, обрабатывать пачками по N суточных файлов (на каждый форкнутый процесс) (0=без ограничения).
+#> Это для того, чтобы при последовательной поэтапной обработке побыстрее получить результат поздних этапов (где это возможно).
+#> 	(т.к. каждый процесс берет себе такую пачку, 
+#> 	то скриптом за один раз обработается batch_max_days помноженное на количество процессов, указанное в fork для данного скрипта)
+    batch_max_days => 5,
+
+#> Версия "light" отчетов будет требовать файлы не за весь период "store_period", а только это кол-во дней
+#>: ( чтобы быстрее получить данные после удаления и пересчета )
+    light_days => 30,
+
+#------------- поиск меток, ответственных за канал с помощью гугла:-----------------
+# от этих настроек зависят файлы:
+# 	В папке $res_dir/20/ - google_metki.gz
+# 	Папки: 30, 50
+
+#>: не применять способ "google_metki + target_metki" для:
+
+    disable_find_metki_for_domains => [
+	'mobile\.beeline\.ru', 'enter','220\-volt','utinet','heverest',
+    ], 
+
+#>: НЕ рассматривать такие метки:
+    unloved_names => [qw| gclid dclid yclid q ef_id text |], # не брать такие в расчет.
+
+#>: если имеются такие имена меток, то сразу брать их ответственными за канал:
+    sufficient_names => [qw| utm_source |], 
+
+#>: если имее(ю)тся значения, которые попадают под регексп (среди равнопретендующих, то оставлять его).
+    favorite_values_rgxp => qr/adwords|google/,
+
+#>: если имее(ю)тся такое(ие) имя(ена) параметров среди равнопретендующих на звание ответственной за канал, то оставлять его.
+    favorite_names => [qw| utm_source ref |],
+#-------------------------------------------------------------------
+
+#----------------- поиск меток, ответственных за канал с помощью выбора по регекспу значений меток из ref
+    target_metki_values_regexp => '\Aga_|\Agd_|unisender|subscription|newsletter|trafmag|actionpay|admitad|mythings|yandex|yandeks|adfox|unilead|multilead|myragon|begun|mediamath|kavanga|sociomantic|adonweb|nadavi|etargeting|marketgid|advmaker|get4click|cityads|cpanetwork|mixmarket|gdeslon|gnezdo|luxup|adlabs|topadvert|tradedoubler|google|adwords|soloway|direct|criteo',
+
+#------------------ предопределенные имена меток, ответственных за канал -------------------------
+# От этих настроек зависят  
+# В $res_dir: папки 30,50
+# в хеше хранятся { sid=>CODEREF,  }, вычисляющий имя метки
+    predefined_metki => \&predefined_metki, # "see code below, and conf: ./predefined_metki.conf" 
+ 
+#>: список доменов, которые не приводить ко второму уровню, а оставлять 3-й уровень:
+    domains_3l => ['\.com$', '\.org$', '\.net$', '\.msk$', '\.spb$', '\.ucoz\.ru$', '\.narod\.ru', '\.com\.ua', 'philips\.ru', ],
+
+#>: список плохих sid, которые пропускать, не обрабатывать:
+    bad_sids => [175517, ], 
+
+
+#> при формировании справочника sid-dom, через perlface по sid берутся домены. 
+#> иногда значения неправильные(старые) или их нет. 
+#> Данный список имеет приоритетное значение:
+    sid_dom_list => {
+	122233 => "bonprix.ru", #  is not 'bonprixsecure.com'
+    },
+
+#------------------ определение канала по именам имеющихся меткок, как достаточным признакам (не гладя в значение)-----------------------------------
+#>: имена "достаточных для определения канала" меток (имя присутствующей метки => название канала):
+
+    sufficient_for_channel => {
+	gclid => "google",
+	dclid => "google",
+	yclid => "yandex",	 
+	_openstat => "yandex",
+#	actionpay => "actionpay", # теперь есть случаи, когда нужно смотреть значение
+	admitad => "admitad",
+	cityads => "cityads",
+	adlabs => "adlabs",
+	map( {"rle".$_,"soloway"} 1..8),
+	#test555=>"ooo",
+    },
+# Игорь дал еще одну:
+# ulmart.ru/catalog/builtin_hoods?id=443&sa=test_314759&from=ohmb_cityads_main&utm_medium=affilate&utm_source=cityads&utm_campaing=remarketing&click_id=XUZ1EpQhmZh5eR&sort=5&viewType=1&rec=true 
+# только я пока не понял как ее использовать.
+
+#-----------------регекспы для склеивания( т.е.группировки) значений меток в отчетах-----
+# задание списка заменяемых ( и склеиваемых потом ) значений меток по регекспу в файле:
+    mval_replace_default => \&mval_replace_default, 
+    mval_replace_custom => \&mval_replace_custom, 
+
+#>: giant (поисковики): определение organic|search|net:
+    # без опции --all_organic скрипт будет проверять бэкдомен только у этих ref-доменов:
+    organic_domains => [ 'mediamarkt.ru', '003.ru', 'svyaznoy.ru' ],
+
+    # если метка входит в этот список, то не трогаем вообще:
+    # при этом пропускается анализ бэедомена, что, кстати, ускоряет работу.
+    giant_exept => [ 'yandex-market', ],    
+
+    # Когда обнаружен поисковый бэкдомен при отсутствии поисковых и отсутствии меток вообще:
+    # (см. ниже) все регекспы из 'bdom'-ов из 'giant' объединяются в один регексп в виде (?:RE1)|(?:RE2) ... и.т.д
+    #  ,где REn - регексп в ключе bdom 
+    # Этим объединенным регекспом попытка сматчить бекдомен. И если он матчится, то первое (и по логике - единственно возможное) значение,
+    #  захваченное круглыми скобками '()' без '?:' внутри - будет значением канала к которому будет приставлен суффикс organic_suffix
+    organic_suffix => "_organic",
+    
+    # если канал попадает в один из ключей:
+    giant => {
+	# bdom - regexp для backdomain; 'search' и 'net' - суффиксы для  типов поисковых меток.
+	# Регексп в bdom должен иметь один захват подстроки из бекдомена с помощью круглых скобок '(подстрока)'.
+	# Если нужно использовать скобки для формирования "или" - можно воспользоваться
+	#  группировкой без захвата: '(?:подстрока1|подстрока2|и.т.д.)' 
+	yandex => { bdom => '\A(yandex)\.(?:ru|com|ua|by|kz)\Z', search => "_search", net=>"" },
+	google => { bdom => '\A(google)\.(?:ru|com)\Z', 	 search => "_search", net=>"" },
+    },
+    
+#>: справочник по контрольным точкам, чтобы считать лиды:
+    leads_control_points => '/usr/local/rle/var/share3/DATA/dicts/leads_control_points.txt',
+#>: справочник типов контрольных точек:
+    leads_control_points_types => '/usr/local/rle/var/share3/DATA/dicts/leads_control_points_types.txt',
+
+#>: при использовании справочника, замена поля expire:
+    replace_expire_value => sub{ s|^NULL$|14|; s|^0$|30| },
+    
+#>: максимальное кол-во дней, анализируемое при поиске, с какого канала пришла кука:
+    max_expire_days => 30,    
+
+#>: метка soloway:
+    our_metka => "soloway",
+
+#>--------------------------- выделение отдельных клиентов------------------
+    
+    custom_clients => { 
+	210976 => { "rambler.ru" => "kassa" }, # kassa.rambler.ru 
+    }, 
+
+
+); #<----- end of main hash.
+
+
+##################################### subs ######################################
+sub predefined_metki {
+    my %rv;
+    #>: predefined_metki должны быть перечислены в файле:
+    my $f = "$conf_dir/predefined_metki.conf";
+    open my $fh, $f or die "Can't open '$f': $!";
+    while (<$fh>){
+	chomp;
+	s/\#.*//;
+	my ( $sid, $mlist ) = split /\;/, $_, 3;
+	next if !$sid;
+	s/^\s*|\s*$//g for $sid, $mlist;
+	my $expr;
+	if ( $mlist=~/\$/ ){
+	    # $mlist - выражение.
+	    $expr = $mlist;
+	}else{
+	    # $mlist - список, из которого нужно сделать выражение.
+	    my @mlist = split /\W+/, $mlist; 
+	    next if !@mlist;
+	    
+	    # с учетом регистра в именах меток:
+	    #$expr = join " || ", map { "\$_[0]->{$_} && '$_'" } @mlist; 
+	    
+	    # без учета регистра в именах меток:
+	    $expr = ' 
+	    for my $predef_name ( ' . join( ',', map {"'$_'"} @mlist ) . ' ){
+		 $_[0]{$predef_name} and return $predef_name;
+		 m/^$predef_name$/i and return $_ for keys %{ $_[0] }; 
+	    }
+	    '; 
+	}
+	my $text = "sub{ no warnings qw/uninitialized/; $expr }";
+	#warn $text;
+	my $coderef = eval $text;    
+	die $@ if $@;
+	$rv{ $sid } = $coderef;
+    }
+    \%rv;
+    #die Dumper \%rv;
+};
+
+sub mval_replace_default {
+	my %rv = ( subs=>[], regs=>[] );
+	#>: значения меток, которые заменять (для склеивания результатов по таким строкам), объявляются ф файле:
+	my $f = "$conf_dir/mval_replace_default.conf";
+	open my $fh, $f or die "Can't open '$f': $!";
+	while ( <$fh> ){
+	    chomp;
+	    s/\#.*//; # комменты удаляются
+	    my ($fld1,$val) = split /\;/; # - разделителем д.б. ";"
+	    s/^\s+|\s+$//g for $fld1, $val; # - обрабляющие пробелы удаляются.
+	    if ( $fld1 and $val ){
+		# это два поля: регексп и значение
+		push @{ $rv{ regs } }, [ $fld1, $val ];
+	    }elsif( $fld1 and !$val ){
+		# это одно поле: код
+		my $str = "sub { $fld1 }";
+		my $code_ref = eval $str; die "$@\nEVALUATED STRING:\n$str" if $@;
+		push @{ $rv{subs} }, $code_ref;
+	    }else{ 
+		next # - пустые значения будут игнорироваться.	
+	    } 
+	}
+	#die Dumper \@rv;
+	\%rv;
+};
+
+
+      
+
+sub mval_replace_custom {
+	my %rv;
+	#>: значения меток, которые заменять (тоже для склеивания), но уже с указанием конкретных клиентов:
+	my $f = "$conf_dir/mval_replace_custom.conf";
+	my $predefined_subs_file = "$conf_dir/predefined_subs.pm";
+	{ no warnings; require $predefined_subs_file } 
+	#    warn( "$predefined_subs_file not found" ); 
+	
+	open my $fh, $f or die "Can't open '$f': $!";
+	while ( <$fh> ){
+	    chomp;
+	    s/\#.*//;
+	    my ($dom,$re,$val) = split /\;/; # - разделителем д.б. ";"
+	    s/^\s+|\s+$//g for $dom, $re, $val; # - обрабляющие пробелы удаляются.
+	    next if !$dom or !$re or !$val; # - пустые значения будут игнорироваться.
+	    
+	    #ВАРИАНТ: во втором поле &funname: (потом уберем)
+	    if ( $re=~m/^\&/ ){
+		# выражение &lala будем считать вызовом функции lala() без аргументов
+		my $oldre = $re;
+		$re = eval $re or warn( "$oldre - returned false after call as function.") and next;
+		#warn "re = $re";
+	    }
+	    
+	    # ВАРИАНТ во втором поле значение "PARTNER"
+	    if ( $re eq "PARTNER" ){
+		# тогда в третьем поле - вызов функции с параметром "имя партнерки" (напр actionpay)
+		# она возвращает для партнерки массив [ [regex, имя_канала], [r,n], ... ]
+		# и так же по dom заполняем re и val -> в %rv 
+		my $call = $val;
+		my $regexp_names_aref = eval $call or warn("call of $call return false") and next;
+		#warn Dumper $regexp_names_aref;
+		for my $i (@$regexp_names_aref){
+		    my ($re, $val) = @$i; # каждый элемент - это ссылка на массив из [re,name]
+		    push @{ $rv{ $dom } }, [ $re, $val ];
+		}
+		#warn Dumper $rv{ $dom };
+		next
+	    }
+	    
+	    # обычный вариант 1-дом, 2-ре, 3-name
+	    push @{ $rv{ $dom } }, [ $re, $val ];
+
+	}
+	#die Dumper \%rv;
+	#warn Dumper \%rv;
+	\%rv;
+};
+
+
+####################  End. Most return a hash: ############
+%c;
+

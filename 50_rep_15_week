@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#> 50_rep_15_day ------> 50_rep_15_week
+exit 0 # откл
+set -u
+set +x
+set -o pipefail
+
+src_file=$1
+res_file=$2
+
+# способ указать список исходных файлов через требуемый период в днях:
+# он страдает иногда от нехватки этих свмых исходных файлов
+# поэтому чтобы иметь хоть что-то, уменьшаем желаемую глубину истории
+# (способ искать все имеющиеся данные осложнен тем, что нужно контролировать непрерывность дней в них)
+
+day=`fn2days "$src_file"`
+
+for deep in 35 28 21 14 7; do
+    days=`hours -t="$day" -n=-${deep}days -shift=1day -days`
+    reps=`files "../RESULT/50/%F/50_rep_15_day.gz" "$days"`
+    reps=`echo "$reps" | only -all -s`
+    # если нашлось такое количество непрерывных файлов, то оставляем так, если нет - продолжаем уменьшать дни
+    echo "$reps" | words -fu=count >&2
+    [[ -n "$reps" ]] && break 
+done    
+
+[[ -z "$reps" ]] && exit 3 # без вывода ошибок в лог
+
+
+perl -Mstrict -Mwarnings -M'Date::Calc qw(Week_of_Year)' -e'
+for my $f ( @ARGV ){
+    my ($y,$m,$d) = $f=~m|(\d\d\d\d)-(\d\d)-(\d\d)|;
+    my ($week,$year) = Date::Calc::Week_of_Year($y,$m,$d);
+    my $sol_week=($year-2012)*52 + $week;
+    open F, "zcat $f|" or die "$f: $!";
+    while(<F>){
+	print join "*", $sol_week, $_;
+    }
+}
+' $reps | sort -T. -t\* -k1,1n -k2,2n -k3,3 -k4,4 | summator -fu="sum,sum,sum"
+ 

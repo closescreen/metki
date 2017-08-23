@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#> Сбор из hl информации о чеке
+(
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+maxf=`conf conf.txt batch_max_days`
+maxf=$(($maxf*24))
+
+day=${1:-""} # можно указать за какой день посчитать
+deb=${2:-""}
+
+[[ -n "$deb" ]] && set -x
+
+if [[ -z "$day" ]]; then
+ hh=$( find ../RESULT/20 -name "[0-9][0-9].gz" | sort | only --upto="`conf conf.txt store_period`"m  | fn2hours )
+else
+ hh=`echo $day | hours -t=${day}T00 -n=24`
+fi
+ 
+echo "$hh" |
+  files "../RESULT/35/%F/%H.gz" |
+  washing -cmd="./35_process %f" -compr=gzip -time="$0.time.log" -max=$maxf
+
+
+)>>"$0.log" 2>&1

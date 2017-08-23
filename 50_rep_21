@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#> Суммы uniq,+cnt колонки (куки) из 40/leads_channels (лидов-каналов)
+#>> Как 01 только, добавлена группировка по источнику(б.домену)
+#>> за один рассчетный день.
+
+set -u
+set +x
+set -o pipefail
+
+src_30=$1 # ../RESULT/30/<day>/total.gz
+res=$2 # ../RESULT/50/<day>/50_rep_01.gz
+day=`fn2days "$res"`
+
+leads_channels="../RESULT/40/$day/leads_channels.gz"
+chk "$leads_channels" "($0 line: $LINENO) leads_channels file" "-s" "exists and filled" nopr || exit 3
+
+lch_format="sid dom channel mark uid sec chsum sz expire channel_sec bdom expired_ch expired_ch_sec"
+
+zcat "$leads_channels" | lae -lb="$lch_format" -M=Dom '_{  p Sid, Dom, Channel||"UNDEF", Dom::d2l(Bdom)||"NA", Mark, Uid, Chsum }' \
+| sort -T. -t\* -k1,1n -k2,2 -k3,3 -k4,4 \
+| summator -fu="uniq,+cnt,sum"
+#>> OUT: Sid, Dom, Channel||"UNDEF", Mark, uniq_leads, leads, chsum

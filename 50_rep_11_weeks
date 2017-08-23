@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#> Перехваты лидов по неделям.
+set +x
+set -o pipefail
+
+src_file=$1 # 30/total.gz, нам он не нужен
+res_file=$2 
+light=$3 # может не быть
+
+if [[ -z "$light" ]]; then
+    #> полная версия берет на вход 50_rep_11_days.gz
+    base_report="50_rep_11_days.gz"
+else
+    #> light-версия берет на вход ...days_light.gz
+    base_report="50_rep_11_days_light.gz"    
+fi
+set -u
+
+day=`fn2days "$src_file"` # рассчетный день
+
+src_report="../RESULT/50/$day/$base_report"
+[[ -s "$src_report" ]] || exit 3
+
+zcat "$src_report" | lae -M='Date::Calc' -lb="day  opponent_channel  dom  lost_or_found  uniq_leads  leads" '
+
+_{
+ my ($y,$m,$d) = Day=~m/(\d\d\d\d)-(\d\d)-(\d\d)/;
+ my ($week,$year) = Date::Calc::Week_of_Year($y,$m,$d);
+ my $sol_week=($year-2012)*52 + $week;
+ p $sol_week, Opponent_channel, Dom, Lost_or_found, Uniq_leads, Leads;
+} 
+' | sort -T. -t\* -k1,1n -k2,2 -k3,3 -k4,4 | summator -fu="sum,sum"
+
+#>> Формат на выходе: неделя * канал-конкурент * сайт * мы_потеряли/мы_приобрели * уник_лидов * лидов

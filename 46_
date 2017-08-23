@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#> 40/leads_channels.gz -------( 46_process )-------> 40/lead_windows.gz
+#(
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+#> файлы-источники: leads_channels.gz:
+days=${1:-""} # можно указать дни строкой в кавычках
+
+if [[ -z "$days" ]]; then
+    ff=`find ../RESULT/40 -name 'leads_channels.gz' | sort`
+else
+    ff=`files "../RESULT/40/%F/leads_channels.gz" "$days"` 
+fi    
+
+echo $ff | washing -res='s|leads_channels.gz|lead_windows.gz|' -v_flag="./46_process %s" -compr=gzip  -timelog="time_46.log"
+
+#)>>"$0.log" 2>&1

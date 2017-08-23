@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#> Траффик ../traffic-dir -----( ./40_process )------> 40/[0-9][0-9].gz
+
+(
+
+set -u
+set -o pipefail
+set +x
+
+docvars="period cp_file cp_reader"
+
+period=`conf conf.txt store_period` # Из конфа: период (мес)
+
+#>! Если ловить лиды в часах (что мы и делаем) - то потеряются некоторые ORDER на границах часа
+
+ff=`find ../traffic_dir/ -name '[0-9][0-9].gz' | sort`
+
+#ff=`echo "$ff" | head -n10` # отладка, 1 file
+
+ff=`echo $ff | only --younger="$period"mon`
+
+# только если есть соответствующий siddom:
+ff=`echo "$ff" | only --having='s|/traffic_dir/(\d\d\d\d-\d\d-\d\d)/\d\d\.gz|/RESULT/20/$1/siddom.gz|'`
+
+# Обрабатывать файлы пачками по несколько штук, размер которых казан в конфе.
+maxf=$((`conf conf.txt batch_max_days`*24 ))
+
+cp_file=`conf conf.txt leads_control_points` # Из конфа: файл с контрольными точками
+chk "$cp_file" "Файл с контрольными точками" "-e" "exists" noprint || exit 1
+cp_reader="./40_cp_reader" # скрипт, который выбирает поля, фильтрует, заполняет умолчания контрольных точек
+
+echo "$ff" | washing  -timelog=./time_40.log -res="s|\.\./traffic_dir|../RESULT/40|" \
+ -v_flag="zcat %s | ./reader | ./40_process %f $cp_file $cp_reader" -comp=gzip -maxf="$maxf" 
+
+)>>"$0.log" 2>&1

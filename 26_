@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+#> ../RESULT/20/$day/total.gz ------( обрабатывает ./26_process )-------> в ../RESULT/20/$day/target_metki.gz 
+#>> ( target_metki.gz - метки, определенные с помощью поиска в 'referer' ключевых значений меток по списку/регекспам )
+(
+cd `dirname $0`
+set +x
+set -u
+set -e
+set -o pipefail
+
+docvars="maxf timelog"
+srcdir="../RESULT/20" #папка-источник
+srcname="total.gz" # файлы-источники 
+resdir="../RESULT/20" # результирующая папка
+resname="target_metki.gz" # результирующие файлы
+
+ff=`find "$srcdir" -name "$srcname" | sort -r`
+
+#ff=`echo  $ff | words -first` # отладка 1 файл
+
+maxf=`conf conf.txt batch_max_days` # количество файлов, обрабатываемое в один проход
+
+timelog="./time_26.log" # timelog
+processor="./26_process"
+
+echo "$ff" | washing -timelog="$timelog" -res="s|$srcdir|$resdir| and s|$srcname|$resname|" -v_flag="$processor %s" -comp=gzip -maxf="$maxf"
+
+)>>"$0.log" 2>&1
+

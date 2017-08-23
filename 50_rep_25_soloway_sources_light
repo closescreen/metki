@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set +x
+set -u
+set -o pipefail
+#> light-версия 50_rep_25_soloway_sources (v2)
+
+./50_rep_26_all_sources_light $* "" "soloway_only" # здесь ""-значит "не all", т.е. "light"
+ 
+ 
+ 
+ 
+ 

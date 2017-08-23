@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#> Сессии - каналы - лиды
+exit 0 # отключаем, если что - убрать эту строку
+set -u
+set +x
+set -o pipefail
+
+src_file=$1
+res_file=$2
+
+day=`fn2days "$src_file"`
+
+younger="30" # для скольких последних расчетных дней считать отчет
+# -- не путать с глубиной анализируемых дней.
+[[ -z `echo "$day" | only --younger=${younger}days` ]] && exit 3
+
+lch_file="../RESULT/40/$day/leads_channels.gz"
+chk "$lch_file" "leads_channels file ($0 line: $LINENO)" "-s" "exist and no empty" noprint || exit 3 
+
+# глубина анализируемых дней для отчета:
+# лиды учитывают переходы до месяца иногда, отсюда желание иметь 30 дней:
+#sessions_files=`files "../RESULT/10/%F/sessions.gz" "$( days "$day" -n=-30 )"`
+sessions_files=`files "../RESULT/10/%F/sessions.gz" "$( hours -d="$day" -shift=1day -n=-30days -days -r )"`
+[[ -z "$(echo "$sessions_files" | only -all -s)" ]] && exit 3 # требование 30 дней периода
+[[ -z "$sessions_files" ]] && exit 3
+
+#>: на входе - поток формата 10/day/sessions 
+
+perl -e'
+use strict; 
+use warnings;
+use Data::Dumper;
+my $lch_file = shift or die "lch_file!";
+open FILE, "zcat $lch_file |" or die $!;
+my %lch; # списки лидов сделанных $uid на $sid, приписанных каналу, переход с которого был $channelsec
+while ( my $l = <FILE> ){
+    chomp $l;
+    my ($sid, $dom, $chan, $mark, $uid, $sec, $chsum, $sz, $expire, $channelsec, $expiredchan, $expiredsec, $bdom) = split /\*/, $l; 
+    if ($chan){
+	# только лиды, засчитанные кому-то 
+	push @{ $lch{ $sid }{ $uid }{ $channelsec } }, $l;
+    }	
+}
+close FILE; 
+#die Dumper \%lch;
+
+# INPUT: 
+# 0   1    2     3     4       5
+#uid sid start stop exposures uniexp
+
+my $sess_files=shift or die "sess files!";
+my @ff = grep {$_} split /\s+/, $sess_files;
+for (@ff){ die "not found file $_!" if ! -e $_ }
+
+for my $file (@ff){
+ open FILE, "zcat $file |" or die "$file: $!";
+ while( my $l = <FILE> ){
+  chomp $l;
+  my ($uid, $sid, $start, $stop, $exposures, $uniexp) = split /\*/, $l;
+  
+  # на входе только сессии с 1 просмотром уже. Если изменится - включить:
+  # next if $exposures != 1;
+ 
+  #> печатаем все лиды, которые приписаны переходу с этой секунды
+  #>> Выходной формат тот же что у leads_channels 
+  if ( my $lsid = $lch{ $sid } ){
+    if ( my $luid = $lsid->{ $uid } ){
+	if ( my $lstart = $luid->{ $start } ){
+	    print $_,"\n" for @$lstart;	
+	}
+    }
+  }
+ }
+ close FILE;
+}
+' "$lch_file" "$sessions_files"
+

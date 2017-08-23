@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set +x
+set -u
+set -o pipefail
+
+src_file=$1
+res_file=$2
+res_dir=`dirname $( dirname "$res_file")`
+
+#>: Склейка ежедневных отчетов (за некоторый период):
+rep="50_rep_23.gz"
+#> Этот отчет ожидает, что будут когда-нибудь данные за все желаемые дни, а если их нет, значит нужно выйти и попытать счастья как-нибудь потом.
+#> По этой причине, он не может ориентироваться лишь на имеющиеся данные и по ним делать отчет, а должен заранее решить сколько ему надо.
+
+#> По умолчанию, данные считаются за light_days из конфа (потому что отчет большой)
+n=`conf conf.txt light_days`
+set +u
+    days=$3 # может быть параметр изменяющий n дней
+set -u
+
+if [ -n "$days" ];then
+    #> версия отчета с явно указанным days. 
+    n="$days"
+fi
+
+#>> Помимо просто склейки, отчет добавляет от себя колонку ДАТА,
+#>> и две колонки КАТЕГОРИЯ из справочника категорий
+#> имя файла справочника категорий: 
+site2category="./site2category.txt"
+
+src_day=`fn2days $src_file`
+
+#> Этот отчет не нужно считать на старые рассчетные дни (например больше недели-двух назад). Все смотрят только свежее.
+#> (Не путать с периодом за который склеиваются данные).
+#> Поэтому, если рассчетный день старее недели, выходим (и не захламлям лог ошибками)
+[[ -z `echo "$src_day" | only --younger=12days` ]] && exit 3
+
+days=`days $src_day -n=-$n`
+days="$days $src_day" # в конец списка добавляем src_day, он 1)завершает сегодняшним днем, 2)не дает nomissing разрешить не свежие данные.
+ff=`echo "$days" | files "$res_dir/%F/50_rep_23.gz"`
+
+ff=`echo $ff | only -all -e` # только если все перечисленные файлы существуют
+[[ -z "$ff" ]] && exit 3 # выход 3 не записывается в лог
+
+#>? пока не решил писать в лог или нет
+#chk "$ff" "Files for report. Possible missing some days?. ( script $0, line $LINENO )" || exit 3 
+
+# Format 50_rep_23.gz:
+#input="sid domain chan bdom mvaldom uuids uids uleads leads chsum"
+
+perl -Mstrict -e'
+ $\="\n";
+ my @ff = @ARGV;
+ for my $f (@ff){
+    open F, "zcat $f |" or die $!;
+    my ($date) = $f=~/(\d\d\d\d-\d\d-\d\d)/;
+    while (<F>){
+	chomp;
+	my @f = split /\*/, $_, -1;
+	$#f=9; # принудительно указываем последний индекс, потому что кол-во полей плавает
+	print join( "*", $date, map {$_||0} @f);
+    }
+ }
+' $ff | addf -k=3 -df="$site2category" -dt=" " -dadd=2,3
+
+#>> Выход:
+#>> date sid domain categ1 categ2 chan bdom mvaldom uuids uids uleads leads chsum
+
+
+
+

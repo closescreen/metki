@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#> По тикету 1642: лиды конкурентов в процентном отношении.
+#(
+set -u
+set +x
+set -o pipefail
+cd `dirname $0`
+
+src=$1
+res=$2
+
+resdir=`dirname $res`
+#> исходные данные для 50_rep_04_concurrents_leads - это $<resdir>/50_rep_04_light
+report_src="$resdir/50_rep_04_light.gz"
+chk "$report_src" "Отчет - источник" "-s" "exists" nop || exit 3
+
+#> отчет строится за период - один день:
+day=`fn2days $report_src`
+
+#> отчет 50_rep_04_concurrents_leads строится по указанному ниже списку клиетов:
+clients="wildberries.ru lamoda.ru bonprix.ru"
+
+for client in $clients; do
+
+desc="
+Client: $client
+Day: $day
+
+-------------------------------
+LEADS	PERCENTS	LABEL
+-------------------------------
+"
+
+
+echo -e "$desc"
+
+#>> Данные из 50_rep_04_light д.б. такими:
+#>>  1     2    3       4        5      6          7                  8            9         10       11     12       
+#>> дата  sid  домен  categ1  categ2  канал  расшифровка_канала  уник_переходов переходов уник_лидов лидов сумма_чека
+
+zcat $report_src | 
+awk -F* -vDAY="$day" -vCLIENT="$client" -vOFS="\t" '$1==DAY && $3~CLIENT {print $11, $6}' | # кол-во_лидов, канал по указанному дню и клиенту
+perl -lane'
+$all_leads += $F[0]; # всего лидов сквозная сумма
+$metka{ $F[1] }{ leads } = $F[0]; # словарь: канал => ск.лидов
+END{ # после того как данные собраны:
+ $,="\t"; 
+ for my $m (keys %metka){
+    # по каждому каналу считаем его процент от всего лидов по клиенту: 
+    $metka{ $m }{ perc } = sprintf( "%.2f", $metka{ $m }{ leads }/ $all_leads * 100 ) 
+ }
+ # печатаем по каждому каналу: 
+ # лидов(абсолютное), лидов(проценты), канал 
+ for my $m ( keys %metka ){
+  print $metka{ $m }{ leads }, $metka{ $m }{ perc }, $m
+ } 
+}' | sort -k1,1nr
+
+done
+
+#)>>"$0.log" 2>&1

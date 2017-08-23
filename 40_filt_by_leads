@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -u
+set +x
+set -o pipefail
+#> фильтрует поток формата 30/total.gz  uid'ами, sid'ами из файла $1
+
+leads_file=$1 # предполагается формат указанный ниже
+
+lae -lb="sid domain mname chan mvaldom uid sec bdom" -sw '
+#> Фильтрует поток, теми sid, uid которые присутствуют в файле с лидами
+my $fn = shift @ARGV;
+my %leads;
+open my $fh, "zcat $fn | cut -d\\* -f1,3 |" or die $!;
+while(<$fh>){  
+    chomp();
+    my ( $sid, $uid ) = split /\*/;
+    $leads{ $sid }{ $uid }||=1;
+}
+
+_{ 
+    return if !$leads{ &Sid }{ &Uid }; 
+    p @F 
+}
+' $leads_file
+
+

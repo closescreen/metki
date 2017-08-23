@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+#> Берет: ../RESULT/20/$day/total.gz ------( обрабатывает ./25_process )-------> сохраняет в ../RESULT/20/$day/google_metki.gz 
+#>> ( google_metki.gz - метки, определенные с помощью гугла )
+(
+cd `dirname $0`
+set +x
+set -u
+set -e
+set -o pipefail
+
+docvars="maxf timelog"
+srcdir="../RESULT/20" #папка-источник
+srcname="total.gz" # файлы-источники 
+resdir="../RESULT/20" # результирующая папка
+resname="google_metki.gz" # результирующие файлы
+
+ff=`find "$srcdir" -name "$srcname" | sort -r`
+
+maxf=`conf conf.txt batch_max_days` # количество файлов, обрабатываемое в один проход
+
+timelog="./time_25.log" # timelog
+processor="./25_process"
+
+echo "$ff" |words -uniq | washing -time="$timelog" -res="s|$srcdir|$resdir| and s|$srcname|$resname|" -v_flag="$processor %s" -comp=gzip -maxf="$maxf"
+
+)>>"$0.log" 2>&1
+

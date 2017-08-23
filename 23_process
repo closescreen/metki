@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -u
+set +x
+set -o pipefail
+
+#> Из входного потока формата 20 - только внешние_переходы выдает уникальные соответствия sid*dom.
+
+#>>  берется первое поле (sid), сортируется, уникалится, через perlface получаем домен
+#>> ,домен переводится в домен 2-го уровня (за исключением domains_3l, указанных в конфе) - получается справочник sid-dom.
+#>! используется скрипт perlface_site2url, который вызывается по ssh на hist7 
+#>  поэтому желательно запускать одновременно только один процесс.
+perlface_site2url='ssh hist7.adriver.x /usr/local/rle/var/grep/d.belyaev/bike/perlface_site2url'
+
+cut -d* -f1 \
+ | sort -un -S 333M --compress-program=gzip \
+ | $perlface_site2url 2>/dev/null \
+ | perl -lane'BEGIN{$,="*"} print $F[0],join("",@F[1..$#F])' \
+ | lae -st -wa -lb="sid dom" '
+        #> Для перевода домена используется модуль Dom.pm 
+        use Dom;
+        my %conf = do "./conf.txt" or die "Conf!";
+	#>: Из конфа: значащие домены 3-го уровня
+	my @domains_3l = map qr/$_/, @{ $conf{ domains_3l } };
+	#>: Из конфа: соответствие sid-domain, которое будет использоваться в первую очередь.
+	my %sid_dom_list = %{ $conf{sid_dom_list} };
+	_{ 
+	    set_dom( $sid_dom_list{ &Sid } || Dom::d2l( Dom, { d3l=>\@domains_3l } ) );
+	    p Sid, Dom if Sid && Dom;
+	    #>> На выходе: Sid, Dom.
+	}
+	'
+

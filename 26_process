@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#> Определение имени метки, ответственной за канал, по регекспам.
+
+
+set -u
+set -o pipefail
+set +x
+#> Определение имен меток, ответственных за канал с помощью их значений и регеспов, заданных в конфе.
+src_file=$1
+input_format="sid dom uid timestamp sz path bdom bpath"
+
+src_dir=$(dirname $(dirname $src_file))
+day=`fn2days $src_file`
+#>: На входе: файлы 20/$day/total.gz  7 дней: 
+days="$(days "$day" -n=-6) $day" # 6 дней назад + текущий $day = 7
+
+src_files=`files "$src_dir/%F/total.gz" "$days" | only -e`
+
+chk "$src_files" "имена файлов total.gz" || exit 1
+zcat $src_files  | lae -M=Urlpa -lb="$input_format" '
+my %conf = do "./conf.txt";
+#>: Из конфа: регексп по которому отбирать значения меток:
+my $regexp = $conf{ target_metki_values_regexp } or die "target_metki_values_regexp!";
+
+#> из src_file (оставляя только переходы) заполняем х-м с именами меток для каждого домена, подпадающих под регексп в конфиге
+my $src_file = shift or die "src_file";
+# src_file format: sid dom uid timestamp path bdom bpath
+my $what="zcat $src_file | cut -d* -f2,6 |";
+open SRC, $what or die "Cant open $!";
+# now format: dom, path
+my $matched;
+while (<SRC>){
+    chomp;
+    my ( $dom, $path) = split /\*/;
+    my %pa = Urlpa::rams( $path );
+    for my $mname ( keys %pa ){ 
+	if ( ! $matched->{ $dom }{ $mname } ){
+	    if ( $pa{ $mname }=~/$regexp/iox ){
+		$matched->{ $dom }{ $mname } = 1;
+		#die "mname=$mname, val=$pa{ $mname }, regexp=$regexp" if $dom eq "wikimart.ru" and $mname eq "recommendedofferid";
+	    }
+	}
+    }
+}
+close SRC;
+
+my %rv;
+my %bad;
+_{
+    #> По каждой строке:
+    my %pa = Urlpa::rams(Path);
+    for my $mname ( keys %pa ){
+	#> По каждой метке:
+	#> Пропускаем метки, где имя метки не из списка
+	next if !$matched->{ &Dom }{ $mname };
+	#> Запоминаем имена с плохими значениями (url, email)
+	if ( ! $bad{ &Dom }{ $mname } ){
+	    $bad{ &Dom }{ $mname }=1 if $pa{ $mname }=~m{\:\/\/|\@};
+	}
+	#> Заполняем домен-имя_метки-cnt = количество строк с данным именем метки 
+	$rv{ &Dom }{ mnames }{ $mname }{ cnt } ++; 
+	#> и количество уникальных значений данной метки
+	my $mvalue = $pa{ $mname };
+	$rv{ &Dom }{ mnames }{ $mname }{ uniq }{ $mvalue }||=1;
+    }
+};
+
+for my $dom ( keys %rv ){
+    for my $mname ( keys %{ $rv{ $dom }{ mnames } } ){
+	#> пропускаем имена из списка плохих
+	next if $bad{ $dom }{ $mname };
+	my $cnt = $rv{ $dom }{ mnames }{ $mname }{ cnt }; # количество встретившихся таких меток 
+	my $uniq = keys %{ $rv{ $dom }{ mnames }{ $mname }{ uniq } }; # кол-во уник значений этой метки
+	my $relative = $uniq / $cnt; # интересует минимальный разброс на максимальном охвате
+	
+	# пробное ограничение на максимальный relative:
+	# next if $relative > 0.3;
+
+	#>> не рассматривает варианты ниже 70% от топовой метки по охвату 
+	my $mnames = $rv{ $dom }{ mnames };
+	my @top_names = sort { $mnames->{$b}{cnt} <=> $mnames->{$a}{cnt} } keys %{ $mnames };
+	my $top_cnt = $mnames->{ $top_names[0] }->{cnt};
+	#die Dumper $mnames, \@top_names, $top_cnt;
+	next if $cnt / $top_cnt < 0.7;
+	
+	#>> Выбираются имена меток с минимальным кол-вом уникальных значений и максимальным охватом.
+	if ( !$rv{ $dom }{ selected } or $rv{ $dom }{ selected }{ relative } > $relative ){
+	    $rv{ $dom }{ selected } = { mname=>$mname, relative=>$relative, cnt=>$cnt, uniq=>$uniq };
+	}
+    }
+}
+# warn Dumper \%rv; # получившаяся структура с вариантами и сделанным выбором
+
+for my $dom ( sort keys %rv ){
+    my %selected = %{ $rv{ $dom }{ selected }||{} };
+    next if !%selected;
+    #>> Выход: домен * выбранное_имя_метки * соотношение_уник_к_общему * уникальных_значений * количество_встретившихся (3 последних - объясняющие/отладочные)
+    p $dom, @selected{qw| mname relative uniq cnt |};
+}
+' "$src_file"

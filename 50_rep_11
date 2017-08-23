@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#> Перехваты лидов.
+set -u
+set +x
+set -o pipefail
+
+src_file=$1
+res_file=$2
+
+day=`fn2days "$src_file"`
+channels_prev_days_file="../RESULT/40/$day/channels_prev_days.gz"
+leads_channels_file="../RESULT/40/$day/leads_channels.gz"
+
+zcat "$leads_channels_file" | lae -lb="sid dom channel mark uid sec chsum sz expire expired_channel expired_channel_sec bdom" '
+
+my %prev;
+#channels_prev_days: sid, dom, uid, chan, sec, bdom
+map { my ($sid, $dom, $uid, $chan, $sec, $bdom) = split /\*/; $prev{$sid}{$dom}{$uid} = $chan } cat shift;
+
+_{
+ #> не берет MARK eq "CONFIRM"
+ return if Mark eq "CONFIRM";
+
+ #> На основе leads_channels и channels_prev_days 
+ #>> какому каналу засчитан лид и кому был бы засчитан, если б не было сегодняшних переходов - детально (по каждому лиду).
+ #>> По этим данным строятся остальные отчеты по перехватам лидов.
+ p Sid, Dom, Uid, Channel, $prev{ &Sid }{ &Dom }{ &Uid }; 
+ #>> Выход: Sid, Dom, Uid, Channel, PreviousChannel; 
+ #> Печатает также строки с пустыми Channel, PreviousChannel.
+};
+
+' "$channels_prev_days_file"
+

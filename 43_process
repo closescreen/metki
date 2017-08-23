@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+#> На какой sid,dom какая кука с какого канала пришла за N дней до рассчетного. Не включая рассчетный.
+set +x
+set -u
+set -o pipefail
+srcfile=$1
+resfile=$2
+srcdir=`dirname $(dirname "$srcfile")`
+resdir=`dirname $(dirname "$resfile")`
+# имя файла содержит дату, на которую ведется расчет 
+day=`fn2days "$resfile"`
+
+# expire = 1 заставляет исследовать, (кроме сегодня) 1 день: вчера, значит берем столько дней назад, сколько равно expire.
+# Максимум, сколько дней назад приход с канала засчитывается 
+# ( позже будет проверка на EXPIRE, так что это значение ограничивает лишь максимум ):
+N=`conf conf.txt max_expire_days` # Из конфа: ограничение максимума для EXPIRE DAYS
+chk "$N" "($0, line: $LINENO, максимальное EXPIRE_DAYS )" || exit 1
+#>Анализируются файлы переходов за N дней до рассчетного дня невключительно (возможно захватывая сперва период чуть больше на несколько часов): 
+days=`hours -d="$day 00" -n=-${N}days -days`
+# файлы, содержащие эти дни: 
+ff=`files "$srcdir/%F/total.gz" "$days"`
+# должны иметься все перечисленные и не пустые: 
+ff=`echo "$ff" | only -all -s`
+# или не надо вообще: 
+chk "$ff" "(script: $0, line: $LINENO). ВСЕ файлы ($N шт.) для расчета должны иметься. Нехватает $? файлов." || exit 1
+#>: должен быть файл с лидами:
+leads_file="$resdir/$day/leads.gz"
+chk "$leads_file" "($0, line: $LINENO ) Файл с лидами" "-s" "exists and filled" noprint || exit 1
+
+#> вх формат 30: sid, dom, mname, mval, mvaldom, uid, sec, bdom
+#                 1    2     3     4     5        6    7    8
+#> сортировка: 1n,2,3,4
+
+#> для уменьшения работы поток фильтруется записями , которые есть в $leads_file (./40_filt_by_leads )
+#> преобазуется к виду Sid, Dom, Uid, Sec, Chan
+#> сортируется -k1,1n -k2,2 -k3,3n -k4,4n
+#> последний по времени канал с которого пришла кука на данный сайт и есть искомый (на момент до рассчетного дня).
+#> Дополнительно сохраняем время перехода куки с канала $soloway
+our_metka=`conf conf.txt our_metka` # "soloway"
+
+zcat $ff \
+ | ./40_filt_by_leads $leads_file \
+ | lae -lb="sid dom mname chan mvaldom uid sec bdom" -sw "_{ p Sid, Dom, Uid, Sec, Chan, Bdom }" \
+ | sort -S333M -T. -t\* -k1,1n -k2,2 -k3,3n -k4,4n \
+ | lae -sw -comm="отсортировано по sid,dom,uid,sec" -lb="sid dom uid sec chan bdom" '
+ my %ch; 
+ my $our_metka = shift or die "our_metka!";
+ _{ 
+    $ch{ &Sid }{ &Dom }{ &Uid }{ chan } = &Chan;
+    $ch{ &Sid }{ &Dom }{ &Uid }{ sec } = &Sec;
+    $ch{ &Sid }{ &Dom }{ &Uid }{ bdom } = &Bdom;
+    if ( $F[CHAN]=~/^$our_metka$/io ){ 
+	$ch{ &Sid }{ &Dom }{ &Uid }{ our_sec } = &Sec; # если канал soloway был то его секунды останутся в поле our_sec
+    }
+ }; 
+ for my $sid ( keys %ch ){ 
+    for my $dom ( keys %{ $ch{$sid} } ){
+	for my $uid ( keys %{ $ch{$sid}{$dom} } ){ 
+	    p $sid, $dom, $uid, @{ $ch{$sid}{$dom}{$uid} }{qw( chan sec bdom our_sec )}
+	    #>> OUT: sid, dom, uid, chan, sec, bdom, our_sec
+	    #>>       1    2    3    4     5    6      7
+	}    
+    } 
+ }
+ ' "$our_metka"

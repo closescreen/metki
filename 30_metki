@@ -1,0 +1,498 @@
+#!/usr/bin/env perl
+
+use strict; 
+use warnings; 
+use Data::Dumper; 
+use Getopt::Long; 
+use FindBin qw($Bin);
+use lib $Bin;
+use List::Util qw(max);
+
+require "predefined_subs.pm"; 
+
+my $usage = q{
+#>> Определяет канал.
+#>> ( Замена для 30_channel и 30_process )
+
+#>> Получает на вход поток (с минимумом необходимых полей) . Разделитель по умолч = "*".
+#>> Печатает поток (в формате, определенном опцией --out-fields [см. ниже] ) 
+#>>  с добавленным полями: канал(channel) и опционально: имя_метки(mname), частый_домен(desc).
+#>
+#> --dict-folder='../RESULT/20' (см ниже)
+#> --dict-day='today' OR --dict-day='2014-11-01' (см ниже)
+#>   первая и вторая части пути к справочникам (ежесуточной статистики):
+#>   пример: #> --dict-folder='../RESULT/20' и -dict-day='2014-11-01' дают путь '../RESULT/20/2014-11-01' в котором находятся файлы за рассчетный день:
+#>     (google_metki.gz, target_metki.gz, mvaldom.gz) 
+#>   Значение  --dict-day='today' автоматом преобразуется к текущей дате (в день запуска).
+#> ИЛИ (для фанатиков)
+#> --dict-google-file='../RESULT/20/2014-11-01/google_metki.gz' - полное имя файла статистики 'по google'
+#> --dict-target-file='../RESULT/20/2014-11-01/target_metki.gz' - полное имя файла статистики 'по target'
+#> --dict-mvaldom-file='../RESULT/20/2014-11-01/mvaldom.gz' - полное имя файла статистики 'по mvaldom'
+#>
+#> --sid=1 - номер поля sid.
+#>
+#> --ref=2 - номер поля referer.
+#> --bref=3 - номер поля back_referer
+#> ИЛИ 
+#> --dom=2 - номер поля domain - используется программой как есть.
+#> --path=3 - номер поля path. 
+#> --bdom=4 - номер поля back_domain
+#>
+#> --out-fields="N1, N2, N3..N9, N10 ..." - номера полей через запятую (,) или диапазон(ы) номеров полей через две точки (..) , которые нужно печатать на выходе. 
+#> Нумерация идет в порядке входных полей.
+#> Кроме номеров входных полей, доступны для печати дополнительные 3 поля по имени:
+#>  channel - канал,
+#>  mname - (metka name) - имя метки (в которой содержится значение канала), 
+#>  desc - поясняющее значение для канала (самый частый по статистике за день домен или замененное его значение) 
+#>  other - все остальные поля, номера которых выше максимального номера входного поля (нет доступа к отдельному полю)
+#>  channelcause - поле, содержащее причину выбора имени/значения метки
+#>
+#> Пример: -print-fields="2..4,6,mname,channel,desc" - печатать поля 2,3,4,6,mname,channel,desc. 
+#>
+#> --empty-channel-string=STRING - не пропускать строки с неопределенным каналом. 
+#>    при этом печатать STRING в поле канал, когда он не определен. 
+#>    Значение --empty-channel-string='undef' - означает печатать пустую строку в поле "channel".
+#>
+#> --libs="." - Добавить путь в пути поиска (@INC) perl-модулей.
+#> --conf="./conf.txt"  - файл конфигурации. По умолчанию = ./conf.txt
+#> -F='\*' - разделитель входных записей - regexp. По умолчанию = '\*'
+#> -OFS="*" - разделитель выходных записей
+#> 
+#> --auto-day=N 
+#>    - если указаны несуществующие файлы статистики - поискать, отматывая назад дату, содержащуюся в полном имени файла в формате lalala/YYYY-MM-DD/lalala
+#>    - N - на какое кол-во дней назад искать файлы статистики. 
+#>    N=0 - отключить поиск ( по умолчанию поиск включен )
+#>
+#> --max-workers=N|auto, N - задействовать это количество воркеров. 'auto' = кол-во процессоров в системе. ( По умолч = 3 )
+#>
+#> --all-organic - пытаться определять поисковые метки "organic" для всех доменов (по умолчанию - только для доменов указанных в конфе) 
+#>
+#> --deb - отладка на STDERR    
+};
+
+my %set = ( 
+    auto_day => 366, 
+    max_workers => 3, # лучшее соотношение цена/качество во многих случаях
+);
+
+GetOptions(
+    "libs=s" => \$set{lib}, # f.e. '../mylibs'
+    "conf=s" => \$set{conf}, # f.e. "./conf.txt"
+    "F=s" => \$set{fsre}, # f.e. '\*'
+    "OFS=s" => \$set{ofs},
+
+    "sid=i" => \$set{sid},
+
+    "ref=i" => \$set{'ref'},
+    "dom=i" => \$set{dom},
+    "path=i" => \$set{path},
+
+    "bref=i" => \$set{bref},
+    "bdom=i" => \$set{bdom},
+
+    "dict-folder=s" => \$set{dict_folder}, # f.e. '../RESULT/20/' OR '../RESULT/20/2014-11-26'(if without --dict-day)
+    "dict-day=s" => \$set{dict_day}, # f.e. '2014-11-26' [ ="today" by default ].
+    
+    "auto-day=i" => \$set{auto_day}, # f.e. --auto-day=0
+    
+    "dict-google-name=s" => \$set{dict_google_name}, # f.e. 'google_metki.gz'
+    "dict-google-file=s" => \$set{dict_google_file}, # f.e. '../RESULT/20/2014-11-26/google_metki.gz' ( = dict_folder + dict-day + dict-google-name )
+
+    "dict-target-name=s" => \$set{dict_target_name}, # f.e. 'target_metki.gz'
+    "dict-target-file=s" => \$set{dict_target_file}, # f.e. '../RESULT/20/2014-11-26/target_metki.gz' ( = dict_folder + dict-day + dict-target-name )    
+    
+    "dict-mvaldom-name=s" => \$set{dict_mvaldom_name}, # f.e. 'mvaldom.gz'
+    "dict-mvaldom-file=s" => \$set{dict_mvaldom_file}, # f.e. '../RESULT/20/2014-11-26/mvaldom.gz' ( = dict_folder + dict-day + dict-mvaldom-name )        
+
+    "empty-channel-string=s" => \$set{empty_channel_string}, # print this string if channel is empty
+
+    "out-fields=s" => \$set{out_fields}, # numbers of fields to out
+
+    "max-workers=i" => \$set{max_workers},
+    
+    "chunk-size=i" => \$set{chunk_size},
+    
+    "all-organic" => \$set{all_organic},
+        
+    "deb" => \$set{deb},
+    "help" => \$set{help},
+) or die "Bad options!";
+
+$set{help} and print $usage and exit 0;
+
+my $debwarn = do {
+ if ( $set{deb} ){ sub{ warn @_; @_} }
+ else { sub{} }
+};
+
+my $split_parts = max( grep {$_} @set{qw| sid ref dom path bref bdom |} )+1;
+
+# --out-fields ожидаются в перловом синтаксисе, поэтому просто делаем eval и получаем развернутый список полей: 
+$set{out_fields} or die "--out-fields f.e.: '1,2..5,mname,channel,desc' must be defined";
+$set{out_fields}=~s/\'|\"|\b/\"/g;
+my @out_fields = eval $set{out_fields} if $set{out_fields};
+die "$@ --out-fields='$set{out_fields}'\n --out option format must be like: --out='1,2..5,mname,channel,desc'" if $@;
+
+&$debwarn("Out fields:".Dumper(\@out_fields));
+
+my %allowed_out = map {$_,1} (1..100, qw( mname channel desc sid ref dom path bref bdom other channelcause ));
+if ( my @bad_out_fields = grep { !$allowed_out{$_} } @out_fields ){
+    die "Not allowed fields: @bad_out_fields. Allowed only: DIGITS or ".( join ",", grep {!m/\d/} keys %allowed_out );
+}
+my %need_opt = (sid=>"field number for SID", dict_folder=>"like: ../RESULT/20/<dict_day>");
+for my $k (keys %need_opt){
+    die "'--$k' ($need_opt{$k}) option required. " if !$set{$k};
+}
+$set{ref} or $set{dom} or die "--ref OR --dom option required";
+$set{bref} or $set{bdom} or die "--bref OR -bdom option required for determinate channel relative backref";
+$set{ref} and ( $set{dom} or $set{path} ) and die "Either '--ref=N' OR ('--dom=N1' and '--path=N2') fields! (Not both).";
+$set{bref} and ( $set{bdom} ) and die "Either '--bref=N' OR ('--bdom=N1' ) fields! (Not both).";
+
+$set{empty_channel_string} and $set{empty_channel_string} eq 'undef' and $set{empty_channel_string}="";
+
+push @INC, grep {$_} split /\,|\:/, $set{lib} if $set{lib};
+# перечисленные ниже модули лежат в папке bike:
+use Dom;
+use Urlpa;
+use MCE export_const => 1;
+use MCE::Flow Sereal => 1;
+use Date::Calc;
+
+
+$set{conf} ||= $set{lib} ? "$set{lib}/conf.txt" : "$Bin/conf.txt" and -s $set{conf} or die "Not found conf $set{conf}";
+my %conf = do $set{conf};
+#&$debwarn( Dumper \%conf );
+
+$set{dict_day}||="today";
+
+if ( $set{dict_day} =~ /today/i ){
+    $set{dict_day} = sprintf("%d-%02d-%02d", Date::Calc::Today())
+}
+
+$set{ dict_google_name } ||= "google_metki.gz";
+$set{ dict_google_file } ||= join "/", map { s|/$||; $_ } grep {$_} @set{qw/ dict_folder dict_day dict_google_name /} 
+    or die "Must be defined --dict-google-file OR --dict-folder --dict-day --dict-google-name";
+    
+$set{ dict_target_name } ||= "target_metki.gz";    
+$set{ dict_target_file } ||= join "/", map { s|/$||; $_ } grep {$_} @set{qw/ dict_folder dict_day dict_target_name /} 
+    or die "Must be defined --dict-target-file OR --dict-folder --dict-day --dict-target-name";    
+
+$set{ dict_mvaldom_name } ||= "mvaldom.gz";
+$set{ dict_mvaldom_file } ||= join "/", map { s|/$||; $_ } grep {$_} @set{qw/ dict_folder dict_day dict_mvaldom_name /}
+    or die "Must be defined --dict-mvaldom-file OR --dict-folder --dict-day --dict-mvaldom-name";    
+
+my $empty_channel_string = $set{empty_channel_string};
+
+# если указаны несуществующие файлы статистики - поискать, отматывая назад дату, содержащуюся в полном имени файла в формате YYYY-MM-DD:
+if ( $set{ auto_day } ){
+    my $die;
+    #require "Date/Calc.pm";
+    for my $option ( qw/ dict_mvaldom_file dict_target_file dict_google_file / ){
+	my $f = $set{ $option } or next;
+	my ($prefix,$year,$mon,$day,$suffix);
+	my ($try_year, $try_mon, $try_day);
+	my $old_set = $set{ $option };
+	if ( !-s $f and ($prefix,$year,$mon,$day,$suffix) = $f=~/(.+)(\d\d\d\d)-(\d\d)-(\d\d)(.+?)$/ ){	
+	    #&$debwarn( "$prefix,$year,$mon,$day,$suffix" );
+	    ( $try_year, $try_mon, $try_day ) = ($year, $mon, $day);
+	    $try_day = $day;
+	    my $try_counter = 0;
+	    until ( -s( $set{ $option } = sprintf("$prefix%02d-%02d-%02d$suffix",$try_year, $try_mon, $try_day)) or $try_counter >= $set{ auto_day } ){
+		#&$debwarn( "try day $prefix$year-$mon-$try_day$suffix" );
+		$try_counter++;
+		($try_year, $try_mon, $try_day) = Date::Calc::Add_Delta_Days($try_year, $try_mon, $try_day, -1);
+	    }	
+	}
+	!-s $set{ $option } and $die=1 and warn "Not found files from $set{ $option } .. to $old_set. --auto-day=$set{ auto_day }";
+    }
+    die "STOP." if $die;
+}
+
+    
+my $fsre = $set{fsre}||'\*';
+my $ofs = $set{ofs}||"*";
+
+
+my $get_fields_sub = do {
+ # Этот блок возвращает CODEREF, который будет сплитить $_ и возвращать хеш-массив значений полей и дополнительных значений
+ # Строка - в $_
+ # Номера входных полей: @set{qw( sid ref dom path bref bdom )}
+ # Ключи выходных полей: @out_fields (это номера и имена)
+ # Нужна ссылка на х-м.
+ my %F;
+ # х-м имя поля=>индекс поля
+ $set{other} = $split_parts; # - все остальные поля под номером +1 от максимального указанного вх номера
+ my %name_num = map { $_, $set{$_} } grep { $set{$_} } qw( sid ref dom path bref bdom other );
+ my ( $sidFN, $refFN, $domFN, $pathFN, $brefFN, $bdomFN, ) = @set{qw( sid ref dom path bref bdom )};
+
+ 
+ sub{
+  my $f;
+  %F = map { ++$f, $_ } split /\*/, $_, $split_parts;
+  
+  if ( $refFN ){
+    @F{qw( dom pars )} = map { $_->[0], $_->[1]?{Urlpa::rams($_->[1])}:{} } [ Dom::split_ref( $F{$refFN} ) ];
+  }elsif( $domFN and $pathFN ){
+    $F{ pars } = $F{$pathFN} ? { Urlpa::rams( $F{$pathFN} ) } : {};
+  }
+
+  if ( $brefFN ){
+    $F{ bdom } = ( Dom::split_ref( $F{$brefFN} ) )[0];
+  }
+  
+  $F{$_}=$F{$name_num{$_}} for keys %name_num;
+  
+  \%F;
+ }  
+
+};
+
+
+sub cat{
+ # usage: cat("file.gz") OR cat("file.txt")
+ # return LIST of chomp'ed lines.
+ my $f;
+ if ( $_[0]=~/\.gz/ ){ open $f, "zcat $_[0] |" or die "Can't open file $_[0]: $!"  }
+ else{ open my $f, '<', $_[0] or die "Can't open file $_[0]: $!" }     
+ return map {chomp; $_} <$f>
+}
+
+# список плохих sid запоминаем в виде х-м:
+my %bad_sids = map {$_,1} @{ $conf{ bad_sids } }; 
+
+# метки, наличия которых достаточно, чтобы определить имя метки:
+my @sufficient_names = @{ $conf{ sufficient_names } };
+&$debwarn( "sufficient_names:", Dumper \@sufficient_names );
+
+# sufficient_for_channel - метки, наличие которых в записи достаточно чтобы определить и имя метки и канал:
+my %sufficient_for_channel = %{ $conf{ sufficient_for_channel } };
+&$debwarn( "sufficient_for_channel", Dumper \%sufficient_for_channel );
+
+# domain => metka
+my %metki = map { (split /\*/)[0,1] } cat $set{ dict_google_file };
+#&$debwarn( Dumper \%metki ); 
+
+# domain => metka
+my %target_metki =  map { (split /\*/)[0,1] } cat $set{ dict_target_file };
+#&$debwarn( Dumper \%target_metki );
+
+#> поверх google_metki пишем target_metki:
+%metki = ( %metki, %target_metki );
+undef %target_metki;
+
+my @disable_find = map qr/$_/, @{ $conf{ disable_find_metki_for_domains } };
+&$debwarn( "disable_find:",Dumper \@disable_find );
+my $disable_find_re = join "|", @disable_find;
+
+# sid => { metka => { value => domain } }
+my %mvaldom; # <-позволяет по sid,mname,mval получить самый частый домен для этого значения.
+for ( cat $set{ dict_mvaldom_file } ){
+    my ($sid, $mname, $mval, $dom) = split /\*/;
+    $mvaldom{ $sid }{ $mname }{ $mval } = $dom;
+}
+#&$debwarn( Dumper \%mvaldom );
+
+# sid => CODEREF для предопределенных меток:
+my %predef_metki = %{ &{ $conf{ predefined_metki } } };
+&$debwarn( "predef_metki:",Dumper \%predef_metki );
+
+# список значимых доменов 3-го уровня (которые не надо переводить во 2-й )
+my @domains_3l = map qr/$_/, @{ $conf{ domains_3l } };
+&$debwarn( "domains_3l:",Dumper \@domains_3l );
+
+#>: Из конфа: списки замены по умолчанию (т.е. для всех сайтов):
+my $mval_replace_default = &{ $conf{ mval_replace_default } };
+#>: Из конфа: кастомные замены (для указанных сайтов)
+my %mval_replace_custom = %{ &{ $conf{ mval_replace_custom } } };
+
+#>: из конфа: organic|search|net:
+my %giant_exept = map {$_,1} @{ $conf{giant_exept} };
+keys %giant_exept or die "giant_exept - empty! in conf";
+
+#>: из конфа: organic_domains: (домены где ищем organic)
+my %organic_domains = map {$_,1} @{ $conf{organic_domains} };
+keys %organic_domains or warn "organic_domais is empty!";
+
+my $organic_suffix = $conf{organic_suffix} or die "organic fuffix!";
+
+# channel => {bdom=>RE, search=>STR, net=>STR}
+my %giant = %{ $conf{giant} };
+keys %giant or die "giant empty! in conf.";
+for my $ch ( keys %giant ){
+    for my $k ( qw|bdom search net| ){
+	defined $giant{$ch}{$k} or die "channel:'$ch' key:'$k' not defined! ".Dumper(\%giant); # но может быть пустой строкой
+    }
+}
+
+# regexp - которым проверять bdom на предмет organic:
+my $giant_any_of_domains = join "|", map { "(?:" . $giant{$_}{bdom} . ")" } keys %giant;
+&$debwarn("giant_any_of_domains=$giant_any_of_domains");
+
+
+my ( $sid, $dom, %params, $bdom, %bparams );
+
+my $worker_sub = sub{ 
+ #MCE->say("Hello from " . MCE->wid);
+ no warnings "uninitialized"; # если оставим так, то можно убрать ниже лишние проверки в случае если потребуется повышать производительность
+ chomp;
+# warn "LINE: +++++++++ $_ +++++++++++";
+ my %F = %{ &$get_fields_sub }; 
+# &$debwarn( "RECORD:".(Dumper \%F)); # - раскомментить если нужно
+ ( $sid, $dom, $bdom ) = @F{qw| sid dom bdom |};
+ %params = %{ $F{pars} };
+ &$debwarn("sid=$sid\ndom=$dom\nparams=".Dumper(\%params)); # не удалять, раскомментить для отладки
+ 
+ METKA_NAME: {
+    #>> плохие домены не рассматриваем:
+    if ( $bad_sids{ $sid } ){ 
+	$F{mname} = ""; 
+	$F{channelcause}="$sid in bad_sids";
+	last METKA_NAME;
+    }
+    
+    #>> Сначала смотрим, есть ли код для меток для данного sid в конфиге (predefined_metki).
+    #>> И если да, то вычисляем имя метки.
+    $F{mname} = $predef_metki{ $sid } && &{ $predef_metki{ $sid } }( \%params ) and $F{channelcause}="predef_metki{sid=$sid}" and last METKA_NAME;
+
+    #>> Если нет, может присутствует метка, чье имя среди достаточных имен меток в конфиге (sufficient_names).
+    for ( @sufficient_names ){
+	if ( exists $params{ $_ } ){
+	    #>> Если да, то берем ее.
+	    $F{mname} = $_ and $F{channelcause}="sufficient_names[$_]" and last METKA_NAME;
+	}
+    }
+
+    #>> Если нет, может есть достаточные признаки определения метки/канала (sufficient_for_channel).
+    for ( keys %sufficient_for_channel ){
+	if ( exists $params{ $_ } ){
+	    #>> Если да, то берем это имя метки.
+	    $F{mname} = $_ and $F{channelcause}="sufficient_for_channel{$_}" and last METKA_NAME;
+	}
+    }
+
+    #>> Если не нашли имени метки и если для этого домена нужно отключить гугловый способ:
+    my $disable_google;
+    if ( $dom ){
+	$disable_google = 1 if $dom =~ m/$disable_find_re/;
+    }
+
+    if ( !$disable_google ){
+	$F{mname} = $metki{ $dom } || $metki{ Dom::d2l( $dom, { d3l=>\@domains_3l } ) }
+    } 
+ }
+# &$debwarn( "mname = ".($F{mname}||"") ); # не удалять, раскомментить для отладки
+ 
+ if ( $F{mname} ){
+    #>> Значение метки получаем через sufficient_for_channel или из значения cgi-параметра.
+    $F{channel} = $sufficient_for_channel{ $F{mname} } || $params{ $F{mname} };
+    
+    #>> Описанием для метки будет или значение из sufficient_for_channel или даиболее частый домен из mvaldom.
+    $F{desc} = $sufficient_for_channel{ $F{mname} } || $F{channel} && $mvaldom{ $sid }{ $F{mname} }{ $F{channel} };
+
+    if ( $F{channel} or $F{desc} ){
+	#&$debwarn( "channel before replace = ".($F{channel}||"")." , desc = ".($F{desc}||"") ); # не удалять, раскомментить для отладки
+	REPLACE: {
+	    # по списку регекспов для замены значения метки:
+	    for my $re_val ( @{ $mval_replace_custom{ $dom }||[] }, @{ $mval_replace_default->{regs} } ){
+		my ( $regexp, $replacement ) = @$re_val;
+		
+		if ( $F{channel}=~/$regexp/ ){ #or $F{desc} && $F{desc}=~/$regexp/ ){
+		    my $old = $F{channel};
+		    $F{channel} = $replacement;
+		    $F{channelcause} .= " (replaced for dom=$dom ( $regexp -> $replacement ) old:$old new:$replacement)";
+		    last REPLACE;
+		}elsif( $F{desc} && $F{desc}=~/$regexp/ ){ 
+		    my $old = $F{desc};
+		    $F{channel} = $replacement;
+		    $F{channelcause} .= " (replaced for dom=$dom ( $regexp -> $replacement ) old:$old new:$replacement)";
+		    last REPLACE;
+		}
+		
+		
+	    }
+
+	    for my $coderef ( @{ $mval_replace_default->{subs} } ){
+		if ( my $val = $coderef->({ MVAL => $F{channel}, MVALDOM => $F{desc} }) ){
+		    my $old = $F{channel};
+		    $F{channel} = $val;
+		    $F{channelcause} .= " (replaced (default) with old:$old new:$val)";
+		    last REPLACE;
+		}
+	    }
+	}
+	
+    }
+ }
+ GIANT: {
+	# Это тоже типа replace, только должен проводиться после основного replace
+	# замена канала на канал_${суффикс}, где суффикс - зависит от типа organic|search|net
+
+	if ( not $set{all_organic} ){ # необходимо вхождение домена в %organic_domains только если нет опции -all-organic
+	    $organic_domains{ $dom } or last GIANT; # ничего не делать если домен не в списке доменов(клиентов) у кот есть органик 
+	}
+
+	my $giant_href; # - "канал находится в списке поисковых каналов"?
+
+	if ( $F{channel} ){
+	    # если канал определен:
+	    #  пропуск хода, если канал в списке исключений:
+    	    last GIANT if $giant_exept{ $F{channel} };
+
+    	    # Может быть присвоена ссылка на х-м (если канал в списке посиковых каналов) а может остаться неопределенным:
+	    $giant_href = $giant{ $F{channel} }; 
+	}
+
+
+	if ( $giant_href ){
+		# если канал определен и он в списке поисковых каналов:
+		if ( $F{ bdom } =~ m/$giant_href->{bdom}/ ){ 
+		    # если бэк домен матчится, значит - платные объявления с поиска:
+		    # к имени канала приписываем суффикс:
+		    $F{channel} .= $giant_href->{search} if $giant_href->{search}; 
+
+		    #>? на счет менять mvaldom или нет - не знаю
+
+		}else{
+		    # если домен не матчится (при поисковом канале), значит - сеть:
+		    # к имени канала приписываем суффикс:
+		    $F{channel} .= $giant_href->{net} if $giant_href->{net};
+		}
+	}else{
+	    # если канал не определен вообще или он не в списке поисковых каналов:
+	    if ( my $name = (grep {$_} $F{bdom}=~m/$giant_any_of_domains/o)[0] ){
+	        # $name - содержит, например 'google' или 'yandex'
+	        # если домен матчится (т.е. он поисковый), значит - organic:
+	        $F{channel} = "$name$organic_suffix";
+	    }
+	    # если домен не матчится - ничего не делаем.
+	}
+ }
+ 
+ if ( defined( $F{channel} ||= $empty_channel_string ) ){
+    #----------------------------------------------
+    MCE->say( join( $ofs, @F{@out_fields} ) );
+    #----------------------------------------------    
+ }
+};
+
+if ( $set{max_workers} > 1 ){
+    # Используетс MCE:
+    MCE::Flow::init {
+	input_data => \*STDIN,
+	max_workers => $set{max_workers},
+	chunk_size => $set{chunk_size}||'auto',
+    };
+
+    MCE::Flow::mce_flow( sub{
+	&$worker_sub for @{$_[CHUNK]};
+    });
+
+}else{
+    warn "single thread";
+    # однопоточный вариант без MCE:
+    &$worker_sub while(<>);
+
+}    
+
+
+

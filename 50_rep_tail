@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set +x
+cd `dirname $0`
+tail_n=`conf conf.txt tail_n`
+chk "$tail_n" "number of lines to 'tail -n' ( $0 )" || exit 1
+tail -n"$tail_n"

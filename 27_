@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+#> из 20/.../total.gz -------( через ./27_process (с использованием siddom.gz, google_metki.gz, target_metki.gz) )-------> в 20/.../mvaldom.gz
+
+(
+
+set +x
+set -u
+set -e
+set -o pipefail
+
+cd `dirname $0`
+
+docvars="maxf"
+srcdir="../RESULT/20" # откуда берет
+srcname="total.gz" # что берет
+resdir="../RESULT/20" # куда кладет
+resname="mvaldom.gz" # что кладет
+process="./27_process" # чем обрабатывает
+
+ff=`find "$srcdir" -name 'total.gz' | sort -r`
+
+#> не берет те источники, где в папке нет siddom.gz
+ff=`echo "$ff" | perl -lane'for (split){ ($siddom=$_)=~s|total\.gz|siddom.gz|; next if (stat $siddom)[7]<=20; print }'`
+
+#> не берет те источники, где не готов google_metki.gz
+ff=`echo $ff | only -near="google_metki.gz"`
+
+#> не берет, где не готов target_metki:
+ff=`echo "$ff" | only -near="target_metki.gz"`
+
+maxf=`conf conf.txt batch_max_days` # Из конфа: кол-во дней за один проход
+
+echo "$ff" | washing -timelog=./time_27.log -res="s|$srcdir|$resdir| and s|$srcname|$resname|" -v_flag="$process '%s'" -compr=gzip -maxf="$maxf"
+
+
+)>>"$0.log" 2>&1

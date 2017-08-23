@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+(
+
+#> версия 2 скрипта 30_. 
+#> Используется скрипт --------> 30_metki <-------.
+
+#> ../RESULT/20/$day/total.gz, siddom.gz, google_metki.gz, target_metki.gz, mvaldom.gz -------( через ./30_process )----> в 30/$day/total.gz
+#> т.е. последняя кардинальная подготовка структурированных данных, по которым уже можно строить отчеты для статистики по переходам.
+
+set +x
+set -u
+
+cd `dirname $0`
+
+day=${1:-""} # можно задать 1 день, за который посчитать в виде YYYY-MM-DD
+
+docvars="maxf"
+src_dir="../RESULT/20" # откуда берет
+src_name="total.gz" # что берет
+res_dir="../RESULT/30" # куда кладет
+process="./30_metki" # чем обрабатывает
+
+if [[ -n "$day" ]]; then
+    chk "$day" "day parameter" is_a_day_format "is a day" noprint
+    [[ ! -d "$src_dir/$day" ]] && exit 1
+
+    ff=`find "$src_dir/$day" -name "$src_name"`
+else
+    # поиск всех файлов-источников:
+    ff=`find "$src_dir" -name "$src_name" | sort`
+fi
+
+#> берем только только те, где готов непустой siddom
+ff=`echo "$ff" | perl -lane'for (split){ ($siddom=$_)=~s|total\.gz|siddom.gz|; next  if (stat $siddom)[7]<=20; print }'`
+#> и где готов mvaldom, target_metki, google_metki:
+ff=`echo "$ff" | only -near="mvaldom.gz target_metki.gz google_metki.gz"`
+
+[[ -z "$ff" ]] && exit 1
+
+maxf=`conf conf.txt batch_max_days` # Из конфа:  количество дней обрабатываемое за один проход
+
+ff=`echo "$ff" | head`;
+
+#                1    2   3   4   5   6    7    8
+# 20/total in:  sid  dom uid sec sz path bdom bpath
+
+# need out: sid, dom, mname, metka_val, val_descr, Uid, Sec, Bdom
+
+echo "$ff" | washing -timelog=./time_30.log -res="s|$src_dir|$res_dir|" \
+ -v_flag="zcat %s |
+ $process -dict-folder=../RESULT/20/ -dict-day=today -sid=1 -dom=2 -path=6 -bdom=7 -out='sid,dom,mname,channel,desc,3,4,7' -max-w=4 |
+ sort -T. -t\\* -k1,1n -k2,2 -k3,3 -k4,4 -S 333M --compress-program=gzip" \
+ -comp=gzip -maxf="$maxf"
+
+
+)>>"$0.log" 2>&1 
+
+
